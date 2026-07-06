@@ -14,15 +14,20 @@ fn main() {
 
     if args.len() < 2 {
         eprintln!("Error: no command");
-        eprintln!("Usage: rmrf <backup|restore> <path> [store_dir]");
+        eprintln!("Usage: rmrf <backup|restore|clean> [args...]");
         std::process::exit(1);
     }
     let cmd = &args[1];
 
-    if cmd != "backup" && cmd != "restore" {
+    if cmd != "backup" && cmd != "restore" && cmd != "clean" {
         eprintln!("Unknown command: {cmd}");
-        eprintln!("Usage: rmrf <backup|restore> <path> [store_dir]");
+        eprintln!("Usage: rmrf <backup|restore|clean> [args...]");
         std::process::exit(1);
+    }
+
+    if cmd == "clean" {
+        clean();
+        return;
     }
 
     if args.len() < 3 {
@@ -195,4 +200,44 @@ fn restore_file(
     println!("Total size: {} bytes", manifest.source.size);
 
     Ok(())
+}
+
+fn clean() {
+    let artifacts = [
+        "empty",
+        "one_byte",
+        "zeros",
+        "ff_bytes",
+        "repeated",
+        "exact_chunk",
+        "chunk_plus",
+        "restored",
+        "rmrf_src",
+        "test.txt",
+        "input.txt",
+        "input.bin",
+        "rmrf_input.txt",
+        "-rmrf_input.txt",
+        "écoß测试.txt",
+    ];
+
+    let mut removed = 0;
+    for name in &artifacts {
+        let path = Path::new(name);
+        if path.exists() {
+            match fs::remove_file(path) {
+                Ok(_) => {
+                    println!("Removed: {name}");
+                    removed += 1;
+                }
+                Err(e) => eprintln!("Failed to remove {name}: {e}"),
+            }
+        }
+    }
+
+    if removed == 0 {
+        println!("Nothing to clean.");
+    } else {
+        println!("Cleaned {removed} test artifact(s).");
+    }
 }
