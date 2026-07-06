@@ -1,9 +1,11 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use fastcdc::v2016::StreamCDC;
+use indicatif::{ProgressBar, ProgressStyle};
 use rmrf_core::{ChunkStore, DedupIndex, DiskFormat, Source};
 use rmrf_manifest::Manifest;
 use rmrf_source::{FileSource, LibvirtLifecycle, NoopLifecycle, ProxmoxLifecycle, VmLifecycle, VmSource};
 use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore, PersistentDedupIndex};
+use serde::Deserialize;
 use std::fmt;
 use std::fs;
 use std::collections::HashSet;
@@ -37,6 +39,32 @@ enum DiskFormatArg {
     Auto,
     Raw,
     Qcow2,
+}
+
+#[derive(Deserialize, Default)]
+#[allow(dead_code)]
+struct RmrfConfig {
+    store: Option<String>,
+    compression_level: Option<u32>,
+    cdc_min: Option<u32>,
+    cdc_avg: Option<u32>,
+    cdc_max: Option<u32>,
+}
+
+#[allow(dead_code)]
+fn load_config() -> RmrfConfig {
+    let config_path = dirs_next().join(".rmrf.toml");
+    match std::fs::read_to_string(&config_path) {
+        Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
+        Err(_) => RmrfConfig::default(),
+    }
+}
+
+#[allow(dead_code)]
+fn dirs_next() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
 }
 
 #[derive(Parser)]
@@ -281,11 +309,19 @@ fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str) ->
     let mut total_bytes = 0;
     let mut dedup_skipped = 0u64;
 
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
+            .unwrap()
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
+    );
+
     for chunk_result in chunker {
         let chunk = match chunk_result {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("Error reading chunk: {}", e);
+                pb.finish_and_clear();
+                eprintln!("Error reading chunk: {e}");
                 return (0, 0, 0);
             }
         };
@@ -300,7 +336,8 @@ fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str) ->
             let location = match chunk_store.put(&hash, data) {
                 Ok(loc) => loc,
                 Err(e) => {
-                    eprintln!("Error storing chunk: {}", e);
+                    pb.finish_and_clear();
+                    eprintln!("Error storing chunk: {e}");
                     return (0, 0, 0);
                 }
             };
@@ -310,9 +347,11 @@ fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str) ->
         chunk_hashes.push(hash);
         chunk_count += 1;
         total_bytes += data.len() as u64;
-        print!(".");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
+        pb.inc(1);
+        pb.set_message(format!("{dedup_skipped}"));
+        pb.set_position(chunk_count);
     }
+    pb.finish_and_clear();
 
     if let Err(e) = dedup_index.save() {
         eprintln!("Warning: failed to save dedup index: {e}");
@@ -437,10 +476,18 @@ fn backup_vm(
     let mut total_bytes = 0;
     let mut dedup_skipped = 0u64;
 
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
+            .unwrap()
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
+    );
+
     for chunk_result in chunker {
         let chunk = match chunk_result {
             Ok(c) => c,
             Err(e) => {
+                pb.finish_and_clear();
                 eprintln!("Error reading chunk: {e}");
                 return;
             }
@@ -456,6 +503,7 @@ fn backup_vm(
             let location = match chunk_store.put(&hash, data) {
                 Ok(loc) => loc,
                 Err(e) => {
+                    pb.finish_and_clear();
                     eprintln!("Error storing chunk: {e}");
                     return;
                 }
@@ -466,9 +514,11 @@ fn backup_vm(
         chunk_hashes.push(hash);
         chunk_count += 1;
         total_bytes += data.len() as u64;
-        print!(".");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
+        pb.inc(1);
+        pb.set_message(format!("{dedup_skipped}"));
+        pb.set_position(chunk_count);
     }
+    pb.finish_and_clear();
 
     let manifests_dir = store_dir.join("manifests");
     let _ = fs::create_dir_all(&manifests_dir);
@@ -552,25 +602,28 @@ fn restore_file(
     let mut output = fs::File::create(dest)?;
     let total = manifest.chunks.len();
 
-    for (i, hash) in manifest.chunks.iter().enumerate() {
+    let pb = ProgressBar::new(total as u64);
+    pb.set_style(
+        ProgressStyle::with_template("{bar:30.cyan/blue} {pos}/{len} chunks")
+            .unwrap()
+            .progress_chars("=> "),
+    );
+
+    for hash in manifest.chunks.iter() {
         match store.get(hash)? {
             Some(data) => {
                 output.write_all(&data)?;
-                if total > 10 && i % (total / 10) == 0 {
-                    print!("\rProgress: {}%", (i * 100) / total);
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                }
+                pb.inc(1);
             }
             None => {
-                eprintln!("\nError: chunk {:?} not found in store", &hash[..4]);
+                pb.finish_and_clear();
+                eprintln!("Error: chunk {:?} not found in store", &hash[..4]);
                 return Err("chunk not found".into());
             }
         }
     }
+    pb.finish_and_clear();
 
-    if total > 10 {
-        println!("\rProgress: 100%");
-    }
     println!("Total chunks restored: {total}");
     println!("Total size: {} bytes", manifest.source.size);
 

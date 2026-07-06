@@ -16,3 +16,6 @@ rmrf-manifest = { path = "../rmrf-manifest" }
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 fastcdc = "3"
+indicatif = "0.17"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
