@@ -322,8 +322,8 @@ fi
 # ── Test 9: Backup non-existent VM ID ──────────────────────────────
 echo ""
 echo "--- Test 9: Error — backup non-existent VM ---"
-# Without --no-suspend, the lifecycle will try qm suspend 99999 and fail
-if $RMRF backup "$DISK_PATH" -s "$STORE" --vm 99999 2>&1 | grep -qiE "error|not found|no such|failed"; then
+# Force proxmox hypervisor (not auto) so qm suspend 99999 actually fails
+if $RMRF backup "$DISK_PATH" -s "$STORE" --vm 99999 --hypervisor proxmox 2>&1 | grep -qiE "error|not found|no such|failed"; then
     pass_msg "Non-existent VM ID: handled gracefully"
 else
     fail_msg "Non-existent VM ID: should print error"
