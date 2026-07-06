@@ -70,6 +70,9 @@ enum Command {
         store: PathBuf,
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Overwrite existing output file (safety: restore refuses without this flag)
+        #[arg(long)]
+        force: bool,
     },
     List {
         #[arg(short, long, default_value = DEFAULT_STORE)]
@@ -132,7 +135,8 @@ fn main() {
             manifest,
             store,
             output,
-        } => restore::restore(&manifest, &store, output.as_deref()),
+            force,
+        } => restore::restore(&manifest, &store, output.as_deref(), force),
         Command::List { store } => commands::list(&store),
         Command::Info { manifest, store } => commands::info(&manifest, &store),
         Command::Verify { manifest, store } => commands::verify(&manifest, &store),

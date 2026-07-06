@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>) {
+pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, force: bool) {
     println!("Restore: {}", manifest_path.display());
 
     let manifest = match Manifest::load(manifest_path) {
@@ -26,6 +26,14 @@ pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>) {
         let parts: Vec<&str> = name.splitn(2, '-').collect();
         Path::new(parts.last().copied().unwrap_or(parts[0]))
     });
+
+    if output_path.exists() && !force {
+        eprintln!(
+            "Error: output file already exists: {} (use --force to overwrite)",
+            output_path.display()
+        );
+        return;
+    }
 
     let chunks_dir = store_dir.join("chunks");
     let local_store = match LocalChunkStore::new(chunks_dir) {
