@@ -1,5 +1,5 @@
 use rmrf_core::{DiskFormat, Source, SourceType};
-use rmrf_source::{NoopLifecycle, VmLifecycle, VmSource};
+use rmrf_source::{NoopLifecycle, ProxmoxLxcLifecycle, VmLifecycle, VmSource};
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::rc::Rc;
@@ -159,4 +159,13 @@ fn vm_source_qcow2_format_metadata() {
         }
     );
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn lxc_lifecycle_conforms_to_trait() {
+    let lifecycle = ProxmoxLxcLifecycle;
+    let result = lifecycle.suspend("9999");
+    assert!(result.is_err(), "pct suspend on non-existent CT should fail");
+    let result = lifecycle.resume("9999");
+    assert!(result.is_err(), "pct resume on non-existent CT should fail");
 }

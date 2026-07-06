@@ -58,6 +58,31 @@ fn run_qm(action: &str, vm_id: &str) -> rmrf_core::Result<()> {
     Ok(())
 }
 
+// ── ProxmoxLxcLifecycle ────────────────────────────────────────
+
+pub struct ProxmoxLxcLifecycle;
+
+impl VmLifecycle for ProxmoxLxcLifecycle {
+    fn suspend(&self, vm_id: &str) -> rmrf_core::Result<()> {
+        run_pct("suspend", vm_id)
+    }
+    fn resume(&self, vm_id: &str) -> rmrf_core::Result<()> {
+        run_pct("resume", vm_id)
+    }
+}
+
+fn run_pct(action: &str, vm_id: &str) -> rmrf_core::Result<()> {
+    let output = Command::new("pct")
+        .args([action, vm_id])
+        .output()
+        .map_err(|e| rmrf_core::RmrfError::Msg(format!("pct {action}: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(rmrf_core::RmrfError::Msg(format!("pct {action}: {stderr}")));
+    }
+    Ok(())
+}
+
 // ── LibvirtLifecycle ────────────────────────────────────────────
 
 pub struct LibvirtLifecycle;

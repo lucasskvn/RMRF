@@ -3,7 +3,9 @@ mod restore;
 mod commands;
 use clap::{Parser, Subcommand, ValueEnum};
 use rmrf_core::DiskFormat;
-use rmrf_source::{LibvirtLifecycle, NoopLifecycle, ProxmoxLifecycle, VmLifecycle};
+use rmrf_source::{
+    LibvirtLifecycle, NoopLifecycle, ProxmoxLifecycle, ProxmoxLxcLifecycle, VmLifecycle,
+};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -13,6 +15,7 @@ const DEFAULT_STORE: &str = "./rmrf-store";
 enum Hypervisor {
     Auto,
     Proxmox,
+    ProxmoxLxc,
     Libvirt,
     Noop,
 }
@@ -22,6 +25,7 @@ impl fmt::Display for Hypervisor {
         match self {
             Hypervisor::Auto => write!(f, "auto"),
             Hypervisor::Proxmox => write!(f, "proxmox"),
+            Hypervisor::ProxmoxLxc => write!(f, "proxmox-lxc"),
             Hypervisor::Libvirt => write!(f, "libvirt"),
             Hypervisor::Noop => write!(f, "noop"),
         }
@@ -42,7 +46,7 @@ enum DiskFormatArg {
     long_about = "RMRF — chunk-based deduplicated backups\n\n\
         Features: content-defined chunking (FastCDC), BLAKE3 hashing, \
         zstd compression, cross-run deduplication, and VM disk backup \
-        (Proxmox/Libvirt)."
+        (Proxmox QEMU/LXC, Libvirt)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -61,9 +65,12 @@ enum Command {
         /// Delete manifests older than N days after backup, then run GC
         #[arg(long)]
         retain: Option<u64>,
-        /// VM ID for VM disk backup (suspends VM, reads disk, resumes VM)
+        /// VM ID for VM/LXC disk backup (auto-detects qm vs pct)
         #[arg(long)]
         vm: Option<String>,
+        /// Disk selector (e.g. scsi1, virtio0, rootfs, mp0). Default: first disk
+        #[arg(long)]
+        disk: Option<String>,
         /// Disk name for VM metadata (default: basename of path)
         #[arg(long)]
         disk_name: Option<String>,
@@ -73,7 +80,7 @@ enum Command {
         /// Skip VM suspend/resume (for already-snapshotted disks)
         #[arg(long)]
         no_suspend: bool,
-        /// Hypervisor type for VM backup
+        /// Hypervisor type: auto, proxmox, proxmox-lxc, libvirt, noop
         #[arg(long, default_value = "auto")]
         hypervisor: Hypervisor,
     },
@@ -134,11 +141,22 @@ fn main() {
             store,
             retain,
             vm,
+            disk,
             disk_name,
             format,
             no_suspend,
             hypervisor,
-        } => handle_backup(path.as_deref(), &store, retain, vm, disk_name, format, no_suspend, hypervisor),
+        } => handle_backup(
+            path.as_deref(),
+            &store,
+            retain,
+            vm,
+            disk.as_deref(),
+            disk_name,
+            format,
+            no_suspend,
+            hypervisor,
+        ),
         Command::Restore {
             manifest,
             store,
@@ -162,6 +180,7 @@ fn handle_backup(
     store: &std::path::Path,
     retain: Option<u64>,
     vm: Option<String>,
+    disk: Option<&str>,
     disk_name: Option<String>,
     format: DiskFormatArg,
     no_suspend: bool,
@@ -170,21 +189,19 @@ fn handle_backup(
     let resolved_path;
     let path = match (path, &vm) {
         (Some(p), _) => p,
-        (None, Some(vm_id)) => {
-            match detect_disk_path(vm_id) {
-                Ok((p, name)) => {
-                    resolved_path = p;
-                    if disk_name.is_none() {
-                        eprintln!("Auto-detected disk: {name}");
-                    }
-                    &resolved_path
+        (None, Some(vm_id)) => match detect_disk_path(vm_id, disk) {
+            Ok((p, name)) => {
+                resolved_path = p;
+                if disk_name.is_none() {
+                    eprintln!("Auto-detected disk: {name}");
                 }
-                Err(e) => {
-                    eprintln!("Error auto-detecting disk for VM {vm_id}: {e}");
-                    return false;
-                }
+                &resolved_path
             }
-        }
+            Err(e) => {
+                eprintln!("Error auto-detecting disk for VM {vm_id}: {e}");
+                return false;
+            }
+        },
         (None, None) => {
             eprintln!("Error: <PATH> is required unless --vm is specified");
             return false;
@@ -199,10 +216,10 @@ fn handle_backup(
     };
 
     let ok = if let Some(vm_id) = vm {
-        let disk = disk_name
+        let disk_label = disk_name
             .as_deref()
             .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
-        backup::backup_vm(path, store, &vm_id, disk, disk_format, lifecycle)
+        backup::backup_vm(path, store, &vm_id, disk_label, disk_format, lifecycle)
     } else {
         backup::backup(path, store)
     };
@@ -234,70 +251,117 @@ fn parse_disk_format(arg: &DiskFormatArg, path: &std::path::Path) -> DiskFormat 
 }
 
 fn detect_hypervisor(vm_id: &str) -> Hypervisor {
-    if std::process::Command::new("qm")
-        .args(["status", vm_id])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
+    if run_cmd("qm", &["status", vm_id]) {
         return Hypervisor::Proxmox;
     }
-    if std::process::Command::new("virsh")
-        .args(["dominfo", vm_id])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
+    if run_cmd("pct", &["status", vm_id]) {
+        return Hypervisor::ProxmoxLxc;
+    }
+    if run_cmd("virsh", &["dominfo", vm_id]) {
         return Hypervisor::Libvirt;
     }
     Hypervisor::Noop
 }
 
-const DISK_PREFIXES: &[&str] = &["scsi", "virtio", "ide", "sata", "efidisk", "tpmstate"];
+fn run_cmd(cmd: &str, args: &[&str]) -> bool {
+    std::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
 
-fn detect_disk_path(vm_id: &str) -> Result<(PathBuf, String), String> {
+const QM_DISK_PREFIXES: &[&str] = &["scsi", "virtio", "ide", "sata", "efidisk", "tpmstate"];
+const PCT_DISK_PREFIXES: &[&str] = &["rootfs", "mp"];
+
+fn detect_disk_path(
+    vm_id: &str,
+    disk_spec: Option<&str>,
+) -> Result<(PathBuf, String), String> {
+    if let Some(result) = try_qm_config(vm_id, disk_spec)? {
+        return Ok(result);
+    }
+    if let Some(result) = try_pct_config(vm_id, disk_spec)? {
+        return Ok(result);
+    }
+    Err("no disk found in VM config (tried qm + pct)".to_string())
+}
+
+fn try_qm_config(
+    vm_id: &str,
+    disk_spec: Option<&str>,
+) -> Result<Option<(PathBuf, String)>, String> {
     let output = std::process::Command::new("qm")
         .args(["config", vm_id])
         .output()
         .map_err(|e| format!("qm config: {e}"))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("qm config: {stderr}"));
+        return Ok(None);
     }
     let config = String::from_utf8_lossy(&output.stdout);
+    find_disk_from_config(&config, QM_DISK_PREFIXES, disk_spec)
+}
 
+fn try_pct_config(
+    vm_id: &str,
+    disk_spec: Option<&str>,
+) -> Result<Option<(PathBuf, String)>, String> {
+    let output = std::process::Command::new("pct")
+        .args(["config", vm_id])
+        .output()
+        .map_err(|e| format!("pct config: {e}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let config = String::from_utf8_lossy(&output.stdout);
+    find_disk_from_config(&config, PCT_DISK_PREFIXES, disk_spec)
+}
+
+fn find_disk_from_config(
+    config: &str,
+    prefixes: &[&str],
+    disk_spec: Option<&str>,
+) -> Result<Option<(PathBuf, String)>, String> {
     for line in config.lines() {
         let line = line.trim();
         let Some((prefix, rest)) = line.split_once(':') else {
             continue;
         };
-        if !DISK_PREFIXES.iter().any(|p| prefix.starts_with(p)) {
+        let prefix = prefix.trim();
+        if !prefixes.iter().any(|p| prefix.starts_with(p)) {
             continue;
+        }
+        if let Some(spec) = disk_spec {
+            if prefix != spec {
+                continue;
+            }
         }
         let rest = rest.trim();
         let volume = rest.split(',').next().unwrap_or(rest).trim();
         if volume.is_empty() || volume == "none" {
             continue;
         }
-
-        let pvesm_output = std::process::Command::new("pvesm")
-            .args(["path", volume])
-            .output()
-            .map_err(|e| format!("pvesm path: {e}"))?;
-        if !pvesm_output.status.success() {
-            let stderr = String::from_utf8_lossy(&pvesm_output.stderr);
-            return Err(format!("pvesm path {volume}: {stderr}"));
-        }
-        let path_str = String::from_utf8_lossy(&pvesm_output.stdout);
-        let path = PathBuf::from(path_str.trim());
-        let disk_name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "disk".to_string());
-        return Ok((path, disk_name));
+        return resolve_pvesm_path(volume);
     }
+    Ok(None)
+}
 
-    Err("no disk found in VM config".to_string())
+fn resolve_pvesm_path(volume: &str) -> Result<Option<(PathBuf, String)>, String> {
+    let output = std::process::Command::new("pvesm")
+        .args(["path", volume])
+        .output()
+        .map_err(|e| format!("pvesm path: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("pvesm path {volume}: {stderr}"));
+    }
+    let path_str = String::from_utf8_lossy(&output.stdout);
+    let path = PathBuf::from(path_str.trim());
+    let disk_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "disk".to_string());
+    Ok(Some((path, disk_name)))
 }
 
 fn build_vm_lifecycle(vm_id: Option<&str>, hypervisor: &Hypervisor) -> Box<dyn VmLifecycle> {
@@ -309,12 +373,11 @@ fn build_vm_lifecycle(vm_id: Option<&str>, hypervisor: &Hypervisor) -> Box<dyn V
                 Hypervisor::Noop
             }
         }
-        Hypervisor::Proxmox => Hypervisor::Proxmox,
-        Hypervisor::Libvirt => Hypervisor::Libvirt,
-        Hypervisor::Noop => Hypervisor::Noop,
+        other => other.clone(),
     };
     match hv {
         Hypervisor::Proxmox => Box::new(ProxmoxLifecycle),
+        Hypervisor::ProxmoxLxc => Box::new(ProxmoxLxcLifecycle),
         Hypervisor::Libvirt => Box::new(LibvirtLifecycle),
         _ => Box::new(NoopLifecycle),
     }
