@@ -8,6 +8,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 overall_pass=0
@@ -58,6 +59,22 @@ run_script "$SCRIPT_DIR/test_edge_cases.sh"
 run_script "$SCRIPT_DIR/test_sizes.sh"
 run_script "$SCRIPT_DIR/test_errors.sh"
 run_script "$SCRIPT_DIR/test_vm_mock.sh"
+
+# Proxmox integration test: only runs on actual Proxmox host (root + qm available)
+if command -v qm &>/dev/null && command -v pvesm &>/dev/null && [ "$(id -u)" -eq 0 ]; then
+    echo -e "${BLUE}━━━ Running: test_proxmox.sh (--create-test-vm) ━━━${NC}"
+    if bash "$SCRIPT_DIR/test_proxmox.sh" --create-test-vm; then
+        ((overall_pass++))
+        echo -e "${GREEN}✓ test_proxmox.sh PASSED${NC}"
+    else
+        ((overall_fail++))
+        echo -e "${RED}✗ test_proxmox.sh FAILED${NC}"
+    fi
+    echo ""
+else
+    echo -e "${YELLOW}━━━ SKIP: test_proxmox.sh (not on Proxmox host) ━━━${NC}"
+    echo ""
+fi
 
 echo -e "${BLUE}╔══════════════════════════════╗${NC}"
 echo -e "${BLUE}║        Final Results          ║${NC}"
