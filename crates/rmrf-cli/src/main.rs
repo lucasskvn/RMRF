@@ -53,8 +53,8 @@ struct Cli {
 enum Command {
     /// Create a backup of a file, directory, or VM disk
     Backup {
-        /// Path to the file, directory, or VM disk to backup
-        path: PathBuf,
+        /// Path to the file, directory, or VM disk to backup (auto-detected with --vm if omitted)
+        path: Option<PathBuf>,
         /// Store directory (where chunks, manifests, and index live)
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
@@ -138,7 +138,7 @@ fn main() {
             format,
             no_suspend,
             hypervisor,
-        } => handle_backup(&path, &store, retain, vm, disk_name, format, no_suspend, hypervisor),
+        } => handle_backup(path.as_deref(), &store, retain, vm, disk_name, format, no_suspend, hypervisor),
         Command::Restore {
             manifest,
             store,
@@ -158,7 +158,7 @@ fn main() {
 
 #[allow(clippy::too_many_arguments)]
 fn handle_backup(
-    path: &std::path::Path,
+    path: Option<&std::path::Path>,
     store: &std::path::Path,
     retain: Option<u64>,
     vm: Option<String>,
@@ -167,6 +167,30 @@ fn handle_backup(
     no_suspend: bool,
     hypervisor: Hypervisor,
 ) -> bool {
+    let resolved_path;
+    let path = match (path, &vm) {
+        (Some(p), _) => p,
+        (None, Some(vm_id)) => {
+            match detect_disk_path(vm_id) {
+                Ok((p, name)) => {
+                    resolved_path = p;
+                    if disk_name.is_none() {
+                        eprintln!("Auto-detected disk: {name}");
+                    }
+                    &resolved_path
+                }
+                Err(e) => {
+                    eprintln!("Error auto-detecting disk for VM {vm_id}: {e}");
+                    return false;
+                }
+            }
+        }
+        (None, None) => {
+            eprintln!("Error: <PATH> is required unless --vm is specified");
+            return false;
+        }
+    };
+
     let disk_format = parse_disk_format(&format, path);
     let lifecycle = if no_suspend {
         Box::new(NoopLifecycle) as Box<dyn VmLifecycle>
@@ -227,6 +251,53 @@ fn detect_hypervisor(vm_id: &str) -> Hypervisor {
         return Hypervisor::Libvirt;
     }
     Hypervisor::Noop
+}
+
+const DISK_PREFIXES: &[&str] = &["scsi", "virtio", "ide", "sata", "efidisk", "tpmstate"];
+
+fn detect_disk_path(vm_id: &str) -> Result<(PathBuf, String), String> {
+    let output = std::process::Command::new("qm")
+        .args(["config", vm_id])
+        .output()
+        .map_err(|e| format!("qm config: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("qm config: {stderr}"));
+    }
+    let config = String::from_utf8_lossy(&output.stdout);
+
+    for line in config.lines() {
+        let line = line.trim();
+        let Some((prefix, rest)) = line.split_once(':') else {
+            continue;
+        };
+        if !DISK_PREFIXES.iter().any(|p| prefix.starts_with(p)) {
+            continue;
+        }
+        let rest = rest.trim();
+        let volume = rest.split(',').next().unwrap_or(rest).trim();
+        if volume.is_empty() || volume == "none" {
+            continue;
+        }
+
+        let pvesm_output = std::process::Command::new("pvesm")
+            .args(["path", volume])
+            .output()
+            .map_err(|e| format!("pvesm path: {e}"))?;
+        if !pvesm_output.status.success() {
+            let stderr = String::from_utf8_lossy(&pvesm_output.stderr);
+            return Err(format!("pvesm path {volume}: {stderr}"));
+        }
+        let path_str = String::from_utf8_lossy(&pvesm_output.stdout);
+        let path = PathBuf::from(path_str.trim());
+        let disk_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "disk".to_string());
+        return Ok((path, disk_name));
+    }
+
+    Err("no disk found in VM config".to_string())
 }
 
 fn build_vm_lifecycle(vm_id: Option<&str>, hypervisor: &Hypervisor) -> Box<dyn VmLifecycle> {
