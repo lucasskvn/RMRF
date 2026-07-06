@@ -85,7 +85,6 @@ pub trait DedupIndex {
 mod tests {
     use crate::*;
 
-
     #[test]
     fn source_id_from_string() {
         let id = SourceId("vm-prod-01".into());

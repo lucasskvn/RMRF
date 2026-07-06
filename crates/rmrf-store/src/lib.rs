@@ -1,7 +1,7 @@
+use blake3::Hasher;
 use rmrf_core::{
     ChunkLocation, ChunkStore, DedupIndex, Hash, IndexEntry, Result as RmrfResult, RmrfError,
 };
-use blake3::Hasher;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -401,7 +401,10 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("index.bincode");
         let hash = make_hash(10);
-        let loc = ChunkLocation { prefix: "ab".into(), filename: "cd.zst".into() };
+        let loc = ChunkLocation {
+            prefix: "ab".into(),
+            filename: "cd.zst".into(),
+        };
 
         {
             let mut idx = PersistentDedupIndex::new(path.clone()).unwrap();
@@ -426,7 +429,10 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("index.bincode");
         let hash = make_hash(20);
-        let loc = ChunkLocation { prefix: "xx".into(), filename: "yy.zst".into() };
+        let loc = ChunkLocation {
+            prefix: "xx".into(),
+            filename: "yy.zst".into(),
+        };
 
         {
             let mut idx = PersistentDedupIndex::new(path.clone()).unwrap();

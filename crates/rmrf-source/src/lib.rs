@@ -124,7 +124,9 @@ impl VmLifecycle for LibvirtLifecycle {
             .map_err(|e| rmrf_core::RmrfError::Msg(format!("virsh suspend: {e}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(rmrf_core::RmrfError::Msg(format!("virsh suspend: {stderr}")));
+            return Err(rmrf_core::RmrfError::Msg(format!(
+                "virsh suspend: {stderr}"
+            )));
         }
         Ok(())
     }
@@ -282,10 +284,7 @@ mod tests {
     }
 
     impl MockLifecycle {
-        fn new(
-            suspended: Rc<RefCell<bool>>,
-            resume_calls: Rc<RefCell<u32>>,
-        ) -> Self {
+        fn new(suspended: Rc<RefCell<bool>>, resume_calls: Rc<RefCell<u32>>) -> Self {
             Self {
                 suspended,
                 resume_calls,
@@ -340,7 +339,11 @@ mod tests {
         let meta = vm.metadata();
         assert_eq!(meta.size, 7);
         match &meta.source_type {
-            SourceType::VmDisk { vm_id, disk_name, format } => {
+            SourceType::VmDisk {
+                vm_id,
+                disk_name,
+                format,
+            } => {
                 assert_eq!(vm_id, "100");
                 assert_eq!(disk_name, "disk0");
                 assert_eq!(*format, DiskFormat::Raw);
@@ -380,7 +383,13 @@ mod tests {
     #[test]
     fn vm_source_suspend_failure_propagates() {
         let path = create_test_file("rmrf_vm_suspend_fail.bin", b"test");
-        let result = VmSource::open(&path, "400", "sda", DiskFormat::Raw, MockLifecycle::failing());
+        let result = VmSource::open(
+            &path,
+            "400",
+            "sda",
+            DiskFormat::Raw,
+            MockLifecycle::failing(),
+        );
         assert!(result.is_err());
         let _ = std::fs::remove_file(&path);
     }
@@ -402,7 +411,11 @@ mod tests {
         let result = VmSource::open(&path, "500", "vdb", DiskFormat::Qcow2, lifecycle);
         assert!(result.is_err());
         assert!(!*suspended.borrow(), "should be resumed after open failure");
-        assert_eq!(*resume_calls.borrow(), 1, "resume should be called exactly once");
+        assert_eq!(
+            *resume_calls.borrow(),
+            1,
+            "resume should be called exactly once"
+        );
 
         let _ = std::fs::remove_file(&path);
     }
