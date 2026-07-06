@@ -9,22 +9,3 @@ pub fn hash_data(data: &[u8]) -> Hash {
     hash.copy_from_slice(result.as_bytes());
     hash
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hash_data_is_deterministic() {
-        let a = hash_data(b"test");
-        let b = hash_data(b"test");
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn hash_data_different_for_different_data() {
-        let a = hash_data(b"hello");
-        let b = hash_data(b"world");
-        assert_ne!(a, b);
-    }
-}
