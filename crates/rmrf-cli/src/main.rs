@@ -38,7 +38,11 @@ enum DiskFormatArg {
 #[derive(Parser)]
 #[command(
     name = "rmrf",
-    about = "RMRF backup tool — chunk-based deduplicated backups"
+    about = "RMRF — chunk-based deduplicated backups with FastCDC + BLAKE3 + zstd",
+    long_about = "RMRF — chunk-based deduplicated backups\n\n\
+        Features: content-defined chunking (FastCDC), BLAKE3 hashing, \
+        zstd compression, cross-run deduplication, and VM disk backup \
+        (Proxmox/Libvirt)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -47,53 +51,78 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Create a backup of a file, directory, or VM disk
     Backup {
+        /// Path to the file, directory, or VM disk to backup
         path: PathBuf,
+        /// Store directory (where chunks, manifests, and index live)
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
+        /// Delete manifests older than N days after backup, then run GC
         #[arg(long)]
         retain: Option<u64>,
+        /// VM ID for VM disk backup (suspends VM, reads disk, resumes VM)
         #[arg(long)]
         vm: Option<String>,
+        /// Disk name for VM metadata (default: basename of path)
         #[arg(long)]
         disk_name: Option<String>,
+        /// Disk format: auto (detect from extension), raw, or qcow2
         #[arg(long, default_value = "auto")]
         format: DiskFormatArg,
+        /// Skip VM suspend/resume (for already-snapshotted disks)
         #[arg(long)]
         no_suspend: bool,
+        /// Hypervisor type for VM backup
         #[arg(long, default_value = "auto")]
         hypervisor: Hypervisor,
     },
+    /// Restore a file from a backup manifest
     Restore {
+        /// Path to the manifest file (.bincode)
         manifest: PathBuf,
+        /// Store directory (where chunks live)
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
+        /// Output path for the restored file (default: manifest basename in CWD)
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Overwrite existing output file (safety: restore refuses without this flag)
         #[arg(long)]
         force: bool,
     },
+    /// List all backups in the store
     List {
+        /// Store directory
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
     },
+    /// Show detailed info for a specific backup
     Info {
+        /// Path to the manifest file (.bincode)
         manifest: PathBuf,
+        /// Store directory
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
     },
+    /// Verify a backup (check all chunks exist on disk)
     Verify {
+        /// Path to the manifest file (.bincode)
         manifest: PathBuf,
+        /// Store directory
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
     },
+    /// Garbage collect orphan chunks (not referenced by any manifest)
     Gc {
+        /// Store directory
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
+        /// Dry run: report what would be deleted without deleting
         #[arg(long)]
         dry_run: bool,
     },
+    /// Clean test artifacts from the current directory
     Clean,
 }
 
