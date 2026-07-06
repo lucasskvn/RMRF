@@ -17,15 +17,9 @@ pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, fo
         }
     };
 
-    let output_path = output.unwrap_or_else(|| {
-        let basename = manifest_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("restored");
-        let name = basename.strip_suffix(".bincode").unwrap_or(basename);
-        let parts: Vec<&str> = name.splitn(2, '-').collect();
-        Path::new(parts.last().copied().unwrap_or(parts[0]))
-    });
+    let output_path = output
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| resolve_output_path(manifest_path));
 
     if output_path.exists() && !force {
         eprintln!(
@@ -46,15 +40,29 @@ pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, fo
     let chunk_store = CompressedChunkStore::new(local_store);
 
     if manifest.chunks.is_empty() {
-        fs::write(output_path, b"").ok();
+        fs::write(&output_path, b"").ok();
         println!("Restored empty file: {}", output_path.display());
         return;
     }
 
-    match restore_file(&manifest, &chunk_store, output_path) {
+    match restore_file(&manifest, &chunk_store, &output_path) {
         Ok(_) => println!("Restore complete: {}", output_path.display()),
         Err(e) => eprintln!("Restore failed: {}", e),
     }
+}
+
+fn resolve_output_path(manifest_path: &Path) -> std::path::PathBuf {
+    let basename = manifest_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("restored");
+    let name = basename.strip_suffix(".bincode").unwrap_or(basename);
+    let parts: Vec<&str> = name.splitn(2, '-').collect();
+    parts
+        .last()
+        .copied()
+        .unwrap_or(parts[0])
+        .into()
 }
 
 pub fn restore_file(
@@ -65,12 +73,7 @@ pub fn restore_file(
     let mut output = fs::File::create(dest)?;
     let total = manifest.chunks.len();
 
-    let pb = ProgressBar::new(total as u64);
-    pb.set_style(
-        ProgressStyle::with_template("{bar:30.cyan/blue} {pos}/{len} chunks")
-            .unwrap_or_else(|_| ProgressStyle::default_bar())
-            .progress_chars("=> "),
-    );
+    let pb = create_progress_bar(total as u64);
 
     for hash in manifest.chunks.iter() {
         match store.get(hash)? {
@@ -91,4 +94,14 @@ pub fn restore_file(
     println!("Total size: {} bytes", manifest.source.size);
 
     Ok(())
+}
+
+fn create_progress_bar(total: u64) -> ProgressBar {
+    let pb = ProgressBar::new(total);
+    pb.set_style(
+        ProgressStyle::with_template("{bar:30.cyan/blue} {pos}/{len} chunks")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=> "),
+    );
+    pb
 }

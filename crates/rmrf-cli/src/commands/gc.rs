@@ -1,0 +1,149 @@
+use rmrf_manifest::Manifest;
+use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
+
+use super::helpers::{format_size, hex_to_bytes};
+
+struct GcStats {
+    orphans: u64,
+    freed_bytes: u64,
+}
+
+pub fn gc(store_dir: &Path, dry_run: bool) {
+    let referenced = collect_referenced_hashes(store_dir);
+    let stats = scan_and_delete_orphans(store_dir, &referenced, dry_run);
+    print_gc_report(&stats, dry_run);
+}
+
+fn collect_referenced_hashes(store_dir: &Path) -> HashSet<[u8; 32]> {
+    let manifests_dir = store_dir.join("manifests");
+    let mut referenced = HashSet::new();
+
+    if let Ok(entries) = fs::read_dir(&manifests_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "bincode") {
+                continue;
+            }
+            if let Ok(m) = Manifest::load(&path) {
+                for hash in m.chunks {
+                    referenced.insert(hash);
+                }
+            }
+        }
+    }
+
+    referenced
+}
+
+fn scan_and_delete_orphans(
+    store_dir: &Path,
+    referenced: &HashSet<[u8; 32]>,
+    dry_run: bool,
+) -> GcStats {
+    let chunks_dir = store_dir.join("chunks");
+    let hex_char = |b: u8| b.is_ascii_hexdigit();
+    let mut orphans = 0u64;
+    let mut freed_bytes = 0u64;
+
+    if let Ok(entries) = fs::read_dir(&chunks_dir) {
+        for prefix in entries.flatten() {
+            let (_name, deleted) = scan_prefix(&prefix, hex_char, referenced, dry_run);
+            orphans += deleted.orphans;
+            freed_bytes += deleted.freed_bytes;
+
+            if !dry_run
+                && prefix
+                    .path()
+                    .read_dir()
+                    .map_or(true, |mut d| d.next().is_none())
+            {
+                fs::remove_dir(prefix.path()).ok();
+            }
+        }
+    }
+
+    GcStats {
+        orphans,
+        freed_bytes,
+    }
+}
+
+fn scan_prefix(
+    prefix: &fs::DirEntry,
+    hex_char: impl Fn(u8) -> bool,
+    referenced: &HashSet<[u8; 32]>,
+    dry_run: bool,
+) -> (String, GcStats) {
+    let name = prefix.file_name().to_string_lossy().to_string();
+    let mut stats = GcStats {
+        orphans: 0,
+        freed_bytes: 0,
+    };
+
+    if name.len() != 2 || !name.bytes().all(hex_char) {
+        return (name, stats);
+    }
+
+    if let Ok(inner_entries) = fs::read_dir(prefix.path()) {
+        for inner in inner_entries.flatten() {
+            let inner_name = inner.file_name().to_string_lossy().to_string();
+            if try_delete_orphan(&inner, &inner_name, &name, referenced, dry_run, &mut stats) {
+                continue;
+            }
+        }
+    }
+
+    (name, stats)
+}
+
+fn try_delete_orphan(
+    inner: &fs::DirEntry,
+    inner_name: &str,
+    name: &str,
+    referenced: &HashSet<[u8; 32]>,
+    dry_run: bool,
+    stats: &mut GcStats,
+) -> bool {
+    let hex_str = format!("{name}{inner_name}");
+    let Some(hash_bytes) = hex_to_bytes(&hex_str) else {
+        return true;
+    };
+    if hash_bytes.len() != 32 {
+        return true;
+    }
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&hash_bytes);
+
+    if referenced.contains(&hash) {
+        return true;
+    }
+
+    let size = inner.metadata().map(|m| m.len()).unwrap_or(0);
+    if dry_run {
+        println!("Would delete orphan: {name}/{inner_name} ({})", format_size(size));
+    } else {
+        fs::remove_file(inner.path()).ok();
+        println!("Deleted orphan: {name}/{inner_name} ({})", format_size(size));
+    }
+    stats.orphans += 1;
+    stats.freed_bytes += size;
+    false
+}
+
+fn print_gc_report(stats: &GcStats, dry_run: bool) {
+    if dry_run {
+        println!(
+            "Dry run: would delete {} orphan chunks, would free {}",
+            stats.orphans,
+            format_size(stats.freed_bytes)
+        );
+    } else {
+        println!(
+            "Deleted {} orphan chunks, freed {}",
+            stats.orphans,
+            format_size(stats.freed_bytes)
+        );
+    }
+}

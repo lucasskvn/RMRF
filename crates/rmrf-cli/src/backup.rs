@@ -54,10 +54,14 @@ fn backup_dir(dir: &Path, store_dir: &Path) {
     }
 
     println!("Directory backup complete!");
-    println!("Files: {total_files}");
-    println!("Chunks: {total_chunks}");
-    println!("Total bytes: {total_bytes}");
-    println!("Dedup skipped (already stored): {total_skipped}");
+    print_dir_summary(total_files, total_chunks, total_bytes, total_skipped);
+}
+
+fn print_dir_summary(files: u64, chunks: u64, bytes: u64, skipped: u64) {
+    println!("Files: {files}");
+    println!("Chunks: {chunks}");
+    println!("Total bytes: {bytes}");
+    println!("Dedup skipped (already stored): {skipped}");
 }
 
 fn walk_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, io::Error> {
@@ -182,12 +186,7 @@ fn run_chunk_loop(
     let mut total_bytes = 0u64;
     let mut dedup_skipped = 0u64;
 
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::with_template("{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner())
-            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
-    );
+    let pb = create_backup_spinner();
 
     for chunk_result in chunker {
         let chunk = match chunk_result {
@@ -201,20 +200,14 @@ fn run_chunk_loop(
         let data = &chunk.data;
         let hash = hash_data(data);
 
-        if let Ok(Some(_entry)) = dedup_index.lookup(&hash) {
-            let _ = dedup_index.increment_refcount(&hash);
-            dedup_skipped += 1;
-        } else {
-            let uncompressed = data.len() as u32;
-            let location = match chunk_store.put(&hash, data) {
-                Ok(loc) => loc,
-                Err(e) => {
-                    pb.finish_and_clear();
-                    eprintln!("Error storing chunk: {e}");
-                    return BackupStats { chunks: 0, bytes: 0, dedup_skipped: 0 };
-                }
-            };
-            let _ = dedup_index.insert(&hash, location, uncompressed, uncompressed);
+        match process_chunk(&hash, data, chunk_store, dedup_index) {
+            ProcessResult::Stored => {}
+            ProcessResult::Skipped => dedup_skipped += 1,
+            ProcessResult::Error(e) => {
+                pb.finish_and_clear();
+                eprintln!("Error storing chunk: {e}");
+                return BackupStats { chunks: 0, bytes: 0, dedup_skipped: 0 };
+            }
         }
 
         chunk_hashes.push(hash);
@@ -232,6 +225,42 @@ fn run_chunk_loop(
     }
 
     save_manifest(&chunk_hashes, metadata, store_dir, timestamp, label, BackupStats { chunks: chunk_count, bytes: total_bytes, dedup_skipped })
+}
+
+enum ProcessResult {
+    Stored,
+    Skipped,
+    Error(String),
+}
+
+fn create_backup_spinner() -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_spinner())
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
+    );
+    pb
+}
+
+fn process_chunk(
+    hash: &[u8; 32],
+    data: &[u8],
+    chunk_store: &mut CompressedChunkStore<LocalChunkStore>,
+    dedup_index: &mut PersistentDedupIndex,
+) -> ProcessResult {
+    if dedup_index.lookup(hash).ok().flatten().is_some() {
+        let _ = dedup_index.increment_refcount(hash);
+        return ProcessResult::Skipped;
+    }
+    let uncompressed = data.len() as u32;
+    match chunk_store.put(hash, data) {
+        Ok(location) => {
+            let _ = dedup_index.insert(hash, location, uncompressed, uncompressed);
+            ProcessResult::Stored
+        }
+        Err(e) => ProcessResult::Error(e.to_string()),
+    }
 }
 
 struct BackupStats {
