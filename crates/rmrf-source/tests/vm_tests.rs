@@ -100,6 +100,18 @@ fn vm_source_suspend_failure_propagates() {
 fn vm_source_open_failure_after_suspend_resumes() {
     use std::os::unix::fs::PermissionsExt;
 
+    let path = std::env::temp_dir().join("rmrf_test_vm_noread_perm");
+    std::fs::write(&path, b"test").unwrap();
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o000);
+    std::fs::set_permissions(&path, perms).unwrap();
+    let is_root = std::fs::File::open(&path).is_ok();
+    let _ = std::fs::remove_file(&path);
+    if is_root {
+        eprintln!("Skipping test: root bypasses file permissions");
+        return;
+    }
+
     let lifecycle = MockLifecycle::new();
     let resume_calls = Rc::clone(&lifecycle.resume_calls);
     let suspended = Rc::clone(&lifecycle.suspended);
