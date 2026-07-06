@@ -1,14 +1,17 @@
 # RMRF — Resilient Modular Backup Framework
 
-Backup tool with chunking, SHA256 deduplication, and Zstd compression.
+Backup tool with FastCDC chunking, BLAKE3 deduplication, zstd compression, and Proxmox/Libvirt VM support.
 
 ## Features
 
-- **Chunking**: 8KB fixed-size chunks
-- **SHA256 deduplication**: identical chunks stored once
-- **Zstd compression**: 4-100x ratio on text/repeated data
-- **Manifest tracking**: each backup records its chunks in a versioned bincode manifest
-- **Filesystem storage**: chunks organized by hash prefix (`ab/cdef...`)
+- **FastCDC chunking**: variable-size chunks (4 KB / 16 KB / 64 KB avg/max)
+- **BLAKE3 deduplication**: identical chunks stored once, persistent cross-run index
+- **Zstd compression**: chunks compressed at level 10
+- **Manifest tracking**: each backup records its chunks in a versioned bincode manifest (v2)
+- **VM backup**: Proxmox (`qm suspend/resume`) and Libvirt (`virsh suspend/resume`) with auto-detection
+- **Directory backup**: recursive, one manifest per file
+- **Retention + GC**: `--retain <days>` deletes old manifests and runs garbage collection
+- **Safety**: `restore --force` required to overwrite existing files
 
 ## Quick Start
 
@@ -18,79 +21,92 @@ Backup tool with chunking, SHA256 deduplication, and Zstd compression.
 cargo build --workspace --release
 ```
 
-### Backup
+### Backup a file
 
 ```bash
-cargo run -- backup /path/to/file ./my-store
+./target/release/rmrf backup /path/to/file -s /path/to/store
 ```
 
-Output:
+### Backup a directory (recursive)
+
+```bash
+./target/release/rmrf backup /path/to/dir -s /path/to/store
 ```
-Backup: /path/to/file
-File size: 5242880 bytes
-.
-Manifest saved: my-store/manifests/20260706T120000Z-file.bincode
-Backup complete!
-Chunks: 640
-Total bytes: 5242880
+
+### Backup a Proxmox VM
+
+```bash
+./target/release/rmrf backup /mnt/pve/TrueNAS/images/103/vm-103-disk-1.qcow2 \
+  -s /var/lib/rmrf --vm 103 --hypervisor proxmox --format qcow2
 ```
+
+The VM is suspended during backup, then resumed.
 
 ### Restore
 
 ```bash
-cargo run -- restore ./my-store/manifests/20260706T120000Z-file.bincode ./my-store
+./target/release/rmrf restore <manifest> -s /path/to/store -o /tmp/restored
 ```
 
-Output:
+### Other commands
+
+```bash
+rmrf list -s /path/to/store              # list all backups
+rmrf info <manifest> -s /path/to/store   # show backup details
+rmrf verify <manifest> -s /path/to/store # check all chunks exist
+rmrf gc -s /path/to/store --dry-run      # find orphan chunks
+rmrf gc -s /path/to/store                # delete orphan chunks
+rmrf clean                               # remove test artifacts
 ```
-Restore: my-store/manifests/20260706T120000Z-file.bincode
-Progress: 100%
-Total chunks restored: 640
-Total size: 5242880 bytes
-Restore complete: file
-```
+
+See **[USAGE.md](USAGE.md)** for the full guide.
 
 ## Architecture
 
 ```
-FileSource ──> hash(SHA256) ──> CompressedChunkStore(Zstd level 10)
-          ──> Manifest(version, source, chunks) ──> bincode serialization
-                             │
-                    manifests/<UTC>-<basename>.bincode
-                    
-Chunk store: <store>/chunks/<XX>/<rest-of-hex>
+Source (File/VmDisk)
+  → FastCDC (variable chunks: 4KB-64KB)
+  → BLAKE3 (hash)
+  → DedupIndex (persistent: index.bincode)
+      found → increment refcount, skip
+      new   → zstd compress → LocalChunkStore → insert in index
+  → Manifest (v2, bincode) → manifests/<UTC>-<basename>.bincode
+
+Chunk store: <store>/chunks/<XX>/<rest-of-hex>.zst
 ```
 
 ### Workspace
 
 | Crate | Purpose |
 |-------|---------|
-| `rmrf-core` | Types (`Source`, `ChunkStore`, `DedupIndex`), traits, error type |
-| `rmrf-source` | `FileSource` with real metadata (mtime, permissions) |
-| `rmrf-store` | `LocalChunkStore` (filesystem), `CompressedChunkStore` (zstd wrapper), `MemoryDedupIndex`, `hash_data` (SHA256) |
-| `rmrf-manifest` | `Manifest` save/load with bincode, version validation |
-| `rmrf-cli` | Binary `rmrf` with `backup` and `restore` commands |
+| `rmrf-core` | Types (`Source`, `ChunkStore`, `DedupIndex`), traits, `RmrfError` |
+| `rmrf-source` | `FileSource`, `VmSource<L>`, `VmLifecycle` (Noop/Proxmox/Libvirt) |
+| `rmrf-store` | `LocalChunkStore`, `CompressedChunkStore` (zstd), `PersistentDedupIndex`, `hash_data` (BLAKE3) |
+| `rmrf-manifest` | `Manifest` save/load with bincode, version validation (v2) |
+| `rmrf-cli` | Binary `rmrf` with `backup`, `restore`, `list`, `info`, `verify`, `gc`, `clean` |
 
 ## Test Results
 
 | Test suite | Tests | Status |
 |------------|-------|--------|
-| Unit tests (Rust) | 34 | all pass |
+| Unit tests (Rust) | 45 | all pass |
 | Basic (shell) | 6 | bit-identical backup/restore |
 | Deduplication | 4 | same file = no new chunks |
 | Edge cases | 8 | empty, 1B, zeros, unicode, exact chunk |
 | Sizes | 9 | 1KB to 5MB random data |
 | Errors | 8 | missing files, corrupt manifests, permissions |
+| VM mock | 5 | ProxmoxLifecycle code path (mock qm) |
+| Proxmox real | 13 | VM 103, qm suspend/resume, 3.2GB→340MB |
 
-Compression example: 7000 bytes of repeated text → 53 bytes stored (132x ratio).
+Compression example: 3.2 GB qcow2 VM disk → 340 MB store (10.5% ratio).
 
 ## Build & Test
 
 ```bash
 cargo build --workspace          # Debug build
 cargo build --workspace --release # Release build
-cargo test --workspace           # Unit tests
-cargo clippy --workspace         # Linter
-cargo fmt                        # Formatter
-bash scripts/test_all.sh         # Full integration suite
+cargo test --workspace           # Unit tests (45)
+cargo clippy --workspace         # Linter (0 warnings)
+bash scripts/test_all.sh         # Full integration suite (35+ shell tests)
+bash scripts/test_proxmox.sh 103 # Real Proxmox test (requires root + qm)
 ```
