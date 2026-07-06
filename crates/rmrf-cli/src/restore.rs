@@ -11,44 +11,59 @@ pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, fo
 
     let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
-        Err(e) => {
-            eprintln!("Error loading manifest: {}", e);
-            return;
-        }
+        Err(e) => return eprintln!("Error loading manifest: {e}"),
     };
 
-    let output_path = output
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| resolve_output_path(manifest_path));
+    let output_path = resolve_output_path_or_default(output, manifest_path);
 
-    if output_path.exists() && !force {
-        eprintln!(
-            "Error: output file already exists: {} (use --force to overwrite)",
-            output_path.display()
-        );
+    if !check_overwrite(&output_path, force) {
         return;
     }
 
-    let chunks_dir = store_dir.join("chunks");
-    let local_store = match LocalChunkStore::new(chunks_dir) {
+    let chunk_store = match open_chunk_store(store_dir) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error opening chunk store: {}", e);
-            return;
-        }
+        Err(e) => return eprintln!("Error opening chunk store: {e}"),
     };
-    let chunk_store = CompressedChunkStore::new(local_store);
 
-    if manifest.chunks.is_empty() {
-        fs::write(&output_path, b"").ok();
-        println!("Restored empty file: {}", output_path.display());
+    if is_empty_manifest(&manifest, &output_path) {
         return;
     }
 
     match restore_file(&manifest, &chunk_store, &output_path) {
         Ok(_) => println!("Restore complete: {}", output_path.display()),
-        Err(e) => eprintln!("Restore failed: {}", e),
+        Err(e) => eprintln!("Restore failed: {e}"),
     }
+}
+
+fn is_empty_manifest(manifest: &Manifest, output_path: &Path) -> bool {
+    if manifest.chunks.is_empty() {
+        fs::write(output_path, b"").ok();
+        println!("Restored empty file: {}", output_path.display());
+        true
+    } else {
+        false
+    }
+}
+
+fn resolve_output_path_or_default(output: Option<&Path>, manifest_path: &Path) -> std::path::PathBuf {
+    output
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| resolve_output_path(manifest_path))
+}
+
+fn check_overwrite(path: &Path, force: bool) -> bool {
+    if path.exists() && !force {
+        eprintln!("Error: output file already exists: {} (use --force to overwrite)", path.display());
+        false
+    } else {
+        true
+    }
+}
+
+fn open_chunk_store(store_dir: &Path) -> Result<CompressedChunkStore<LocalChunkStore>, String> {
+    let chunks_dir = store_dir.join("chunks");
+    let local_store = LocalChunkStore::new(chunks_dir).map_err(|e| e.to_string())?;
+    Ok(CompressedChunkStore::new(local_store))
 }
 
 fn resolve_output_path(manifest_path: &Path) -> std::path::PathBuf {

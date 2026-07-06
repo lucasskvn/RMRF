@@ -128,7 +128,6 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-
     match cli.command {
         Command::Backup {
             path,
@@ -139,27 +138,7 @@ fn main() {
             format,
             no_suspend,
             hypervisor,
-        } => {
-            let format = parse_disk_format(&format, &path);
-            let lifecycle = if no_suspend {
-                Box::new(NoopLifecycle) as Box<dyn VmLifecycle>
-            } else {
-                build_vm_lifecycle(vm.as_deref(), &hypervisor)
-            };
-
-            if let Some(vm_id) = vm {
-                let disk = disk_name
-                    .as_deref()
-                    .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
-                backup::backup_vm(&path, &store, &vm_id, disk, format, lifecycle);
-            } else {
-                backup::backup(&path, &store);
-            }
-
-            if let Some(days) = retain {
-                commands::run_retention_and_gc(&store, days);
-            }
-        }
+        } => handle_backup(&path, &store, retain, vm, disk_name, format, no_suspend, hypervisor),
         Command::Restore {
             manifest,
             store,
@@ -171,6 +150,38 @@ fn main() {
         Command::Verify { manifest, store } => commands::verify(&manifest, &store),
         Command::Gc { store, dry_run } => commands::gc(&store, dry_run),
         Command::Clean => commands::clean(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_backup(
+    path: &std::path::Path,
+    store: &std::path::Path,
+    retain: Option<u64>,
+    vm: Option<String>,
+    disk_name: Option<String>,
+    format: DiskFormatArg,
+    no_suspend: bool,
+    hypervisor: Hypervisor,
+) {
+    let disk_format = parse_disk_format(&format, path);
+    let lifecycle = if no_suspend {
+        Box::new(NoopLifecycle) as Box<dyn VmLifecycle>
+    } else {
+        build_vm_lifecycle(vm.as_deref(), &hypervisor)
+    };
+
+    if let Some(vm_id) = vm {
+        let disk = disk_name
+            .as_deref()
+            .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
+        backup::backup_vm(path, store, &vm_id, disk, disk_format, lifecycle);
+    } else {
+        backup::backup(path, store);
+    }
+
+    if let Some(days) = retain {
+        commands::run_retention_and_gc(store, days);
     }
 }
 
