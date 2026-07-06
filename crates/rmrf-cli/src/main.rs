@@ -1,7 +1,7 @@
 use rmrf_core::{ChunkStore, DedupIndex, Source};
 use rmrf_manifest::Manifest;
 use rmrf_source::FileSource;
-use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore, MemoryDedupIndex};
+use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore, PersistentDedupIndex};
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -71,7 +71,14 @@ fn backup(source: &Path, store_dir: &Path) {
         }
     };
     let mut chunk_store = CompressedChunkStore::new(local_store);
-    let mut dedup_index = MemoryDedupIndex::new();
+    let index_path = store_dir.join("index.bincode");
+    let mut dedup_index = match PersistentDedupIndex::new(index_path) {
+        Ok(idx) => idx,
+        Err(e) => {
+            eprintln!("Error: failed to load dedup index: {e}");
+            return;
+        }
+    };
 
     let mut buffer = vec![0u8; CHUNK_SIZE];
     let mut chunk_hashes: Vec<[u8; 32]> = Vec::new();
@@ -116,6 +123,11 @@ fn backup(source: &Path, store_dir: &Path) {
 
     let manifests_dir = store_dir.join("manifests");
     let _ = fs::create_dir_all(&manifests_dir);
+
+    if let Err(e) = dedup_index.save() {
+        eprintln!("Warning: failed to save dedup index: {e}");
+    }
+
     let manifest = Manifest {
         version: 1,
         source: metadata,
