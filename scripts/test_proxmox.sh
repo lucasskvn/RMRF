@@ -87,7 +87,7 @@ if [ "$CREATE_TEST_VM" = true ]; then
 
     # Detect first active storage
     # Detect first active storage suitable for VM disks (lvmthin, dir, or zfs)
-    PVE_STORAGE=$(pvesm status | awk 'NR>1 && $2=="active" && ($3=="lvmthin" || $3=="dir" || $3=="zfs") {print $1; exit}')
+    PVE_STORAGE=$(pvesm status | awk 'NR>1 && $2=="active" {print $1; exit}')
     if [ -z "$PVE_STORAGE" ]; then
         fail_msg "No active Proxmox storage found. Aborting."
         exit "$fail"
@@ -106,7 +106,7 @@ if [ "$CREATE_TEST_VM" = true ]; then
     STORAGE_VOL=$(echo "$RAW_LINE" | awk '{print $2}' | cut -d, -f1)
     DISK_PATH=$(pvesm path "$STORAGE_VOL" 2>/dev/null)
 
-    if [ -z "$DISK_PATH" ] || [ ! -b "$DISK_PATH" ]; then
+    if [ -z "$DISK_PATH" ] || { [ ! -b "$DISK_PATH" ] && [ ! -f "$DISK_PATH" ]; }; then
         fail_msg "Cannot resolve disk path for VM $VMID"
         exit "$fail"
     fi
@@ -183,10 +183,15 @@ BACKUP_ARGS=("$DISK_PATH" -s "$STORE" --vm "$VMID" --disk-name "scsi0")
 if [ -n "$SUSPEND_FLAG" ]; then
     BACKUP_ARGS+=("$SUSPEND_FLAG")
 fi
-if $RMRF backup "${BACKUP_ARGS[@]}" > /dev/null 2>&1; then
+BACKUP_OUTPUT=$($RMRF backup "${BACKUP_ARGS[@]}" 2>&1 >/dev/null)
+BACKUP_RC=$?
+if [ $BACKUP_RC -eq 0 ]; then
     pass_msg "Backup with --vm $VMID succeeded"
 else
-    fail_msg "Backup with --vm $VMID failed"
+    fail_msg "Backup with --vm $VMID failed (exit $BACKUP_RC)"
+    echo "  ┌─ Error output:"
+    echo "$BACKUP_OUTPUT" | sed 's/^/  │ /'
+    echo "  └─"
 fi
 
 # Count manifests
