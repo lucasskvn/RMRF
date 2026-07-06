@@ -184,9 +184,13 @@ fi
 echo ""
 echo "--- Test 8: Compression ---"
 STORE_SIZE=$(du -sb "$STORE/chunks" 2>/dev/null | cut -f1)
-ORIG_SIZE=$(echo "$INFO_OUT" | grep -i "Source size:" | grep -oP '\d+ bytes' | grep -oP '\d+')
+ORIG_SIZE=$(echo "$INFO_OUT" | grep -i "Source size:" | grep -oE '[0-9]+ bytes' | grep -oE '[0-9]+')
 if [ -n "$ORIG_SIZE" ] && [ "$STORE_SIZE" -lt "$ORIG_SIZE" ]; then
-    RATIO=$(echo "scale=1; 100 * $STORE_SIZE / $ORIG_SIZE" | bc 2>/dev/null || echo "?")
+    if command -v bc &>/dev/null; then
+        RATIO=$(echo "scale=1; 100 * $STORE_SIZE / $ORIG_SIZE" | bc)
+    else
+        RATIO=$((100 * STORE_SIZE / ORIG_SIZE))
+    fi
     pass_msg "Compressed: ${RATIO}% of original"
 else
     warn_msg "Ratio unavailable (orig=$ORIG_SIZE, store=$STORE_SIZE)"
