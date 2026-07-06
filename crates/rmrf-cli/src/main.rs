@@ -1,7 +1,7 @@
-use rmrf_core::{ChunkStore, Source};
+use rmrf_core::{ChunkStore, DedupIndex, Source};
 use rmrf_manifest::Manifest;
 use rmrf_source::FileSource;
-use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore};
+use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore, MemoryDedupIndex};
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -71,11 +71,13 @@ fn backup(source: &Path, store_dir: &Path) {
         }
     };
     let mut chunk_store = CompressedChunkStore::new(local_store);
+    let mut dedup_index = MemoryDedupIndex::new();
 
     let mut buffer = vec![0u8; CHUNK_SIZE];
     let mut chunk_hashes: Vec<[u8; 32]> = Vec::new();
     let mut chunk_count = 0;
     let mut total_bytes = 0;
+    let mut dedup_skipped = 0u64;
 
     loop {
         match file_source.read(&mut buffer) {
@@ -84,10 +86,21 @@ fn backup(source: &Path, store_dir: &Path) {
                 let data = &buffer[..n];
                 let hash = hash_data(data);
 
-                if let Err(e) = chunk_store.put(&hash, data) {
-                    eprintln!("Error storing chunk: {}", e);
-                    return;
+                if let Ok(Some(_entry)) = dedup_index.lookup(&hash) {
+                    let _ = dedup_index.increment_refcount(&hash);
+                    dedup_skipped += 1;
+                } else {
+                    let uncompressed = data.len() as u32;
+                    let location = match chunk_store.put(&hash, data) {
+                        Ok(loc) => loc,
+                        Err(e) => {
+                            eprintln!("Error storing chunk: {}", e);
+                            return;
+                        }
+                    };
+                    let _ = dedup_index.insert(&hash, location, uncompressed, uncompressed);
                 }
+
                 chunk_hashes.push(hash);
                 chunk_count += 1;
                 total_bytes += n as u64;
@@ -122,6 +135,7 @@ fn backup(source: &Path, store_dir: &Path) {
     println!("Backup complete!");
     println!("Chunks: {}", chunk_count);
     println!("Total bytes: {}", total_bytes);
+    println!("Dedup skipped (already stored): {}", dedup_skipped);
 }
 
 fn restore(dest: &Path, store_dir: &Path) {
@@ -134,7 +148,7 @@ fn restore(dest: &Path, store_dir: &Path) {
             if let Ok(metadata) = entry.metadata() {
                 if metadata.is_file() {
                     let path = entry.path();
-                    if path.extension().map_or(false, |ext| ext == "bincode") {
+                    if path.extension().is_some_and(|ext| ext == "bincode") {
                         latest_manifest = Some(path);
                         break;
                     }
