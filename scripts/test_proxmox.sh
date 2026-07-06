@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# test_proxmox.sh — Real Proxmox integration test
+# test_proxmox.sh — Real Proxmox integration test (QEMU + LXC)
 #
 # Usage:
-#   ./test_proxmox.sh --create-test-vm   # Creates VM 9000, tests, destroys
-#   ./test_proxmox.sh <vmid>              # Tests on existing VM
-#   ./test_proxmox.sh <vmid> --no-suspend # Skip suspend (VM stopped or snapshotted)
+#   ./test_proxmox.sh <vmid>                # QEMU VM, auto-detect disk
+#   ./test_proxmox.sh <vmid> --no-suspend   # Skip suspend (stopped VM or snapshot)
+#   ./test_proxmox.sh <vmid> --disk scsi1   # Specific disk
+#   ./test_proxmox.sh <ctid> --lxc          # LXC container
 #
-# Safety: NEVER restores to the original disk path. All restores go to /tmp.
+# Safety: NEVER restores to the original disk. All restores go to /tmp.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Use installed binary if available, otherwise cargo run
 if command -v rmrf &>/dev/null; then
     RMRF="rmrf"
 elif [ -x /usr/local/bin/rmrf ]; then
@@ -25,361 +25,216 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
-
-pass=0
-fail=0
-
+pass=0 fail=0
 pass_msg() { echo -e "${GREEN}PASS${NC} $1"; ((++pass)); }
 fail_msg() { echo -e "${RED}FAIL${NC} $1"; ((++fail)); }
 warn_msg() { echo -e "${YELLOW}WARN${NC} $1"; }
 
 # ── Parse args ─────────────────────────────────────────────────────
-CREATE_TEST_VM=false
-NO_SUSPEND=false
-VMID=""
-DISK_PATH=""
-STORE="/tmp/rmrf-proxmox-test"
+VMID="" DISK_OPT="" STORE="/tmp/rmrf-proxmox-test"
+LXC=false NO_SUSPEND=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --create-test-vm) CREATE_TEST_VM=true; shift ;;
-        --no-suspend)     NO_SUSPEND=true; shift ;;
-        --disk)           DISK_PATH="$2"; shift 2 ;;
-        --store)          STORE="$2"; shift 2 ;;
-        *)                VMID="$1"; shift ;;
+        --lxc)        LXC=true; shift ;;
+        --no-suspend) NO_SUSPEND=true; shift ;;
+        --disk)       DISK_OPT="$2"; shift 2 ;;
+        --store)      STORE="$2"; shift 2 ;;
+        -*)           echo "Unknown option: $1"; exit 1 ;;
+        *)            VMID="$1"; shift ;;
     esac
 done
+
+if [ -z "$VMID" ]; then
+    echo "Usage: $0 <vmid|ctid> [--lxc] [--no-suspend] [--disk <spec>] [--store <path>]"
+    exit 1
+fi
+
+HYPERVISOR_FLAG=""
+CMD_PREFIX="qm"
+if [ "$LXC" = true ]; then
+    HYPERVISOR_FLAG="--hypervisor proxmox-lxc"
+    CMD_PREFIX="pct"
+fi
 
 # ── Cleanup ────────────────────────────────────────────────────────
 cleanup() {
     echo ""
     echo "--- Cleanup ---"
-
-    # Safety: if VM was running and backup was supposed to suspend it, ensure it's back
-    if [ -n "${VMID:-}" ] && [ "${VM_WAS_RUNNING:-false}" = true ] && [ -z "${SUSPEND_FLAG:-}" ]; then
+    if [ "$LXC" = false ] && [ "$VM_WAS_RUNNING" = true ] && [ "$NO_SUSPEND" = false ]; then
         local after
         after=$(qm status "$VMID" 2>/dev/null || echo "unknown")
         if echo "$after" | grep -qiE "suspended|paused"; then
-            echo "WARNING: VM $VMID was left suspended — resuming"
+            echo "WARNING: VM $VMID left suspended — resuming"
             qm resume "$VMID" 2>/dev/null || true
         fi
     fi
-
-    if [ "$CREATE_TEST_VM" = true ]; then
-        # Check if VM 9000 exists and stop/destroy it
-        if qm status 9000 &>/dev/null 2>&1; then
-            echo "Stopping and destroying VM 9000..."
-            qm stop 9000 --skiplock 2>/dev/null || true
-            sleep 2
-            qm destroy 9000 --purge 2>/dev/null || true
-        fi
-        rm -f /tmp/rmrf-test-vm-disk.raw
-    fi
-    rm -rf "$STORE" /tmp/rmrf-restored-vm* /tmp/rmrf-store-error-test 2>/dev/null || true
+    rm -rf "$STORE" /tmp/rmrf-restored-vm* 2>/dev/null || true
 }
 trap cleanup EXIT
 
 # ── Pre-flight ─────────────────────────────────────────────────────
-echo "╔════════════════════════════════════════╗"
-echo "║   RMRF Proxmox Integration Test       ║"
-echo "╚════════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════════╗"
+echo "║   RMRF Proxmox Integration Test ($($LXC && echo LXC || echo QEMU))     ║"
+echo "╚══════════════════════════════════════════════╝"
 echo ""
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo -e "${RED}FAIL${NC} Must be run as root (qm/pvesm require root)"
-    exit 1
+    fail_msg "Must be run as root"; exit 1
 fi
 
-for cmd in qm pvesm; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo -e "${RED}FAIL${NC} Required command not found: $cmd"
-        exit 1
-    fi
-done
-echo -e "${GREEN}PASS${NC} Pre-flight: root + qm + pvesm OK"
-
-# ── Create test VM (if --create-test-vm) ──────────────────────────
-if [ "$CREATE_TEST_VM" = true ]; then
-    VMID=9000
-    echo ""
-    echo "Creating test VM $VMID..."
-
-    # Detect first active storage
-    # Detect first active storage suitable for VM disks (lvmthin, dir, or zfs)
-    PVE_STORAGE=$(pvesm status | awk 'NR>1 && $2=="active" {print $1; exit}')
-    if [ -z "$PVE_STORAGE" ]; then
-        fail_msg "No active Proxmox storage found. Aborting."
-        exit "$fail"
-    fi
-    echo "  Using storage: $PVE_STORAGE"
-
-    # Create VM with 100M disk
-    if ! qm create "$VMID" --memory 128 --scsi0 "$PVE_STORAGE":100M &>/dev/null; then
-        fail_msg "Failed to create test VM $VMID"
-        exit "$fail"
-    fi
-    sleep 1
-
-    # Get disk path
-    RAW_LINE=$(qm config "$VMID" 2>/dev/null | grep -E '^(scsi|ide|virtio|sata)[0-9]+:' | head -1)
-    STORAGE_VOL=$(echo "$RAW_LINE" | awk '{print $2}' | cut -d, -f1)
-    DISK_PATH=$(pvesm path "$STORAGE_VOL" 2>/dev/null)
-
-    if [ -z "$DISK_PATH" ] || { [ ! -b "$DISK_PATH" ] && [ ! -f "$DISK_PATH" ]; }; then
-        fail_msg "Cannot resolve disk path for VM $VMID"
-        exit "$fail"
-    fi
-    echo "  Disk path: $DISK_PATH"
-
-    # Write random data to disk (fill first 50 MB)
-    echo "  Writing test data to disk..."
-    dd if=/dev/urandom of="$DISK_PATH" bs=1M count=50 conv=notrunc 2>/dev/null
-
-    # Do NOT start VM — backup with --no-suspend
-    NO_SUSPEND=true
-    echo -e "${GREEN}PASS${NC} Test VM $VMID created with 100M disk"
-else
-    # Validate VM ID for existing VM mode
-    if [ -z "$VMID" ]; then
-        echo "Usage: $0 [options] [vmid]"
-        echo "  $0 --create-test-vm"
-        echo "  $0 100 [--disk /dev/pve/vm-100-disk-0] [--no-suspend]"
-        exit 1
-    fi
-    if ! qm status "$VMID" &>/dev/null; then
-        fail_msg "VM $VMID does not exist"
-        exit "$fail"
-    fi
+if ! $CMD_PREFIX status "$VMID" &>/dev/null; then
+    fail_msg "$CMD_PREFIX: instance $VMID does not exist"; exit 1
 fi
 
-# ── Resolve disk path (if not already set by --create-test-vm) ─────
-if [ -z "$DISK_PATH" ]; then
-    RAW_LINE=$(qm config "$VMID" 2>/dev/null | grep -E '^(scsi|ide|virtio|sata)[0-9]+:' | head -1)
-    STORAGE_VOL=$(echo "$RAW_LINE" | awk '{print $2}' | cut -d, -f1)
-    if [ -n "$STORAGE_VOL" ]; then
-        DISK_PATH=$(pvesm path "$STORAGE_VOL" 2>/dev/null)
-    fi
-    if [ -z "$DISK_PATH" ]; then
-        fail_msg "Cannot auto-detect disk path for VM $VMID. Use --disk <path>"
-        exit "$fail"
-    fi
-fi
-
-echo ""
-echo "Testing VM $VMID | Disk: $DISK_PATH | Store: $STORE"
-echo ""
-
-# ── Determine suspend mode ─────────────────────────────────────────
-VM_STATUS=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
-SUSPEND_FLAG=""
-if [ "$NO_SUSPEND" = true ]; then
-    SUSPEND_FLAG="--no-suspend"
-    echo "  Mode: no-suspend"
-elif [ "$VM_STATUS" = "running" ]; then
-    echo -e "  ${YELLOW}VM is RUNNING. Backup will suspend it.${NC}"
-    echo -n "  Continue? [Y/n] "
-    read -r confirm
-    if [ "$confirm" = "n" ] || [ "$confirm" = "N" ]; then
-        echo "Aborted."
-        exit 1
-    fi
-    echo "  Mode: suspend"
-else
-    echo "  VM status: $VM_STATUS (will use --no-suspend)"
-    SUSPEND_FLAG="--no-suspend"
-fi
-
-# Get original size for compression ratio check
-ORIG_SIZE_BYTES=$(stat --format=%s "$DISK_PATH" 2>/dev/null || echo "unknown")
-
-# ── Record pre-backup state for safety ──────────────────────────────
 VM_WAS_RUNNING=false
-STATUS_BEFORE=$(qm status "$VMID" 2>/dev/null)
-if echo "$STATUS_BEFORE" | grep -qi "running"; then
+if $CMD_PREFIX status "$VMID" 2>/dev/null | grep -qi "running"; then
     VM_WAS_RUNNING=true
 fi
 
-# ── Test 1: Backup with real qm suspend/resume ─────────────────────
-echo ""
-echo "--- Test 1: Backup with --vm $VMID ---"
-BACKUP_ARGS=("$DISK_PATH" -s "$STORE" --vm "$VMID" --disk-name "scsi0")
-if [ -n "$SUSPEND_FLAG" ]; then
-    BACKUP_ARGS+=("$SUSPEND_FLAG")
+if [ "$VM_WAS_RUNNING" = true ] && [ "$NO_SUSPEND" = false ] && [ "$LXC" = false ]; then
+    echo -e "  ${YELLOW}VM $VMID is RUNNING. Backup will suspend it.${NC}"
+    echo -n "  Continue? [Y/n] "
+    read -r confirm
+    [[ "$confirm" =~ ^[Nn] ]] && exit 0
 fi
-set +e  # don't exit on backup failure — captures error output
-BACKUP_OUTPUT=$($RMRF backup "${BACKUP_ARGS[@]}" 2>&1 >/dev/null)
+
+SUSPEND_FLAG=""
+[ "$NO_SUSPEND" = true ] && SUSPEND_FLAG="--no-suspend"
+
+echo ""
+echo "Testing $VMID | Store: $STORE"
+echo ""
+
+# ── Test 1: Backup ─────────────────────────────────────────────────
+echo "--- Test 1: Backup ---"
+BACKUP_ARGS=(--vm "$VMID" -s "$STORE")
+[ -n "$SUSPEND_FLAG" ] && BACKUP_ARGS+=("$SUSPEND_FLAG")
+[ -n "$DISK_OPT" ] && BACKUP_ARGS+=("--disk" "$DISK_OPT")
+BACKUP_ARGS+=($HYPERVISOR_FLAG)
+
+set +e
+BACKUP_STDERR=$($RMRF backup "${BACKUP_ARGS[@]}" 2>&1 >/dev/null)
 BACKUP_RC=$?
 set -e
 if [ $BACKUP_RC -eq 0 ]; then
-    pass_msg "Backup with --vm $VMID succeeded"
+    pass_msg "Backup succeeded"
 else
-    fail_msg "Backup with --vm $VMID failed (exit $BACKUP_RC)"
-    echo "  ┌─ Error output:"
-    echo "$BACKUP_OUTPUT" | sed 's/^/  │ /'
-    echo "  └─"
+    fail_msg "Backup failed (exit $BACKUP_RC)"
+    echo "$BACKUP_STDERR" | sed 's/^/  │ /'
 fi
 
-# Count manifests
 MANIFEST=$(ls -t "$STORE/manifests/"*.bincode 2>/dev/null | head -1) || true
+[ -z "$MANIFEST" ] && { fail_msg "No manifest found"; echo ""; echo "Results: $pass pass, $fail fail"; exit $fail; }
 
-# ── Test 2: VM status after backup ─────────────────────────────────
+# ── Test 2: VM resume ──────────────────────────────────────────────
 echo ""
-echo "--- Test 2: VM status (suspend/resume) ---"
-if [ -n "$SUSPEND_FLAG" ]; then
-    pass_msg "(skipped: --no-suspend mode)"
-elif [ "$VM_STATUS" != "running" ]; then
-    pass_msg "(skipped: VM was not running before backup)"
-else
-    STATUS_AFTER=$(qm status "$VMID" 2>/dev/null)
-    if echo "$STATUS_AFTER" | grep -qi "running"; then
-        pass_msg "VM is running after backup (resume called)"
+echo "--- Test 2: VM resume ---"
+if [ "$VM_WAS_RUNNING" = true ] && [ "$NO_SUSPEND" = false ] && [ "$LXC" = false ]; then
+    if qm status "$VMID" 2>/dev/null | grep -qi "running"; then
+        pass_msg "VM running after backup (resume OK)"
     else
-        fail_msg "VM is NOT running after backup: $STATUS_AFTER"
+        fail_msg "VM NOT running after backup"
     fi
-fi
-
-# ── Test 3: rmrf list ──────────────────────────────────────────────
-echo ""
-echo "--- Test 3: rmrf list ---"
-if $RMRF list -s "$STORE" > /dev/null 2>&1; then
-    pass_msg "List command succeeded"
 else
-    fail_msg "List command failed"
+    pass_msg "(skipped)"
 fi
 
-# ── Test 4: rmrf info (VmDisk metadata) ────────────────────────────
+# ── Test 3: list ───────────────────────────────────────────────────
 echo ""
-echo "--- Test 4: rmrf info ---"
+echo "--- Test 3: list ---"
+$RMRF list -s "$STORE" > /dev/null 2>&1 && pass_msg "list OK" || fail_msg "list failed"
+
+# ── Test 4: info ───────────────────────────────────────────────────
+echo ""
+echo "--- Test 4: info ---"
 INFO_OUT=$($RMRF info "$MANIFEST" -s "$STORE" 2>&1)
-if echo "$INFO_OUT" | grep -qi "VmDisk"; then
-    pass_msg "Info shows VmDisk metadata"
-else
-    fail_msg "Info missing VmDisk metadata"
-fi
+echo "$INFO_OUT" | grep -qi "VmDisk" && pass_msg "info VmDisk metadata" || fail_msg "info missing VmDisk"
 
-# ── Test 5: rmrf verify ────────────────────────────────────────────
+# ── Test 5: verify ─────────────────────────────────────────────────
 echo ""
-echo "--- Test 5: rmrf verify ---"
-VERIFY_OUT=$($RMRF verify "$MANIFEST" -s "$STORE" 2>&1)
-if echo "$VERIFY_OUT" | grep -qiE "present|ok|0 missing|all"; then
-    pass_msg "Verify: all chunks present"
-else
-    fail_msg "Verify: chunks missing"
-fi
+echo "--- Test 5: verify ---"
+$RMRF verify "$MANIFEST" -s "$STORE" 2>&1 | grep -qiE "present|ok|0 missing|all chunks" \
+    && pass_msg "verify OK" || fail_msg "verify failed"
 
-# ── Test 6: Restore to /tmp ────────────────────────────────────────
+# ── Test 6: Restore ────────────────────────────────────────────────
 echo ""
 echo "--- Test 6: Restore to /tmp ---"
 RESTORED="/tmp/rmrf-restored-vm-${VMID}"
-if $RMRF restore "$MANIFEST" -s "$STORE" -o "$RESTORED" > /dev/null 2>&1; then
-    pass_msg "Restore succeeded"
-else
-    fail_msg "Restore failed"
-fi
+$RMRF restore "$MANIFEST" -s "$STORE" -o "$RESTORED" > /dev/null 2>&1 \
+    && pass_msg "Restore OK" || fail_msg "Restore failed"
 
-# ── Test 7: Bit-identical (cmp) ────────────────────────────────────
+# ── Test 7: Bit-identical ──────────────────────────────────────────
 echo ""
-echo "--- Test 7: Bit-identical comparison ---"
-if [ -f "$RESTORED" ]; then
-    if [ "$VM_WAS_RUNNING" = true ]; then
-        warn_msg "VM was running: cmp skipped (live disk changed after resume, bit-identical impossible)"
+echo "--- Test 7: Bit-identical ---"
+if [ ! -f "$RESTORED" ]; then
+    fail_msg "Restored file missing"
+elif [ "$VM_WAS_RUNNING" = true ] && [ "$NO_SUSPEND" = false ]; then
+    warn_msg "VM running: cmp skipped (live disk changed)"
+else
+    SRC_PATH=$(echo "$INFO_OUT" | grep -i "^Source path:" | sed 's/^[^:]*: *//')
+    if [ -n "$SRC_PATH" ] && cmp "$SRC_PATH" "$RESTORED" > /dev/null 2>&1; then
+        pass_msg "Bit-identical"
     else
-        RESTORED_SIZE=$(stat --format=%s "$RESTORED")
-        if [ "$ORIG_SIZE_BYTES" != "unknown" ] && [ "$RESTORED_SIZE" -eq "$ORIG_SIZE_BYTES" ] 2>/dev/null; then
-            if cmp "$DISK_PATH" "$RESTORED" > /dev/null 2>&1; then
-                pass_msg "Bit-identical: $RESTORED matches $DISK_PATH"
-            else
-                fail_msg "Bit-identical: cmp mismatch"
-            fi
-        else
-            warn_msg "Size mismatch or unknown (orig=$ORIG_SIZE_BYTES, restored=$RESTORED_SIZE)"
-            if cmp "$DISK_PATH" "$RESTORED" > /dev/null 2>&1; then
-                pass_msg "Bit-identical despite size note"
-            else
-                fail_msg "Bit-identical: cmp mismatch"
-            fi
-        fi
+        fail_msg "cmp mismatch (src=$SRC_PATH)"
     fi
-else
-    fail_msg "Restored file not found: $RESTORED"
 fi
 
-# ── Test 8: Compression (store < disk size) ─────────────────────────
+# ── Test 8: Compression ────────────────────────────────────────────
 echo ""
-echo "--- Test 8: Compression ratio ---"
-if [ -d "$STORE/chunks" ]; then
-    STORE_SIZE=$(du -sb "$STORE/chunks" 2>/dev/null | cut -f1)
-    if [ "$ORIG_SIZE_BYTES" != "unknown" ] && [ "$STORE_SIZE" -lt "$ORIG_SIZE_BYTES" ]; then
-        RATIO=$(echo "scale=1; 100 * $STORE_SIZE / $ORIG_SIZE_BYTES" | bc 2>/dev/null || echo "?")
-        pass_msg "Store size $STORE_SIZE < original $ORIG_SIZE_BYTES (${RATIO}% of original)"
-    else
-        warn_msg "Cannot compute ratio (orig=$ORIG_SIZE_BYTES, store=$STORE_SIZE)"
-    fi
+echo "--- Test 8: Compression ---"
+STORE_SIZE=$(du -sb "$STORE/chunks" 2>/dev/null | cut -f1)
+ORIG_SIZE=$(echo "$INFO_OUT" | grep -i "Source size:" | grep -oP '\d+ bytes' | grep -oP '\d+')
+if [ -n "$ORIG_SIZE" ] && [ "$STORE_SIZE" -lt "$ORIG_SIZE" ]; then
+    RATIO=$(echo "scale=1; 100 * $STORE_SIZE / $ORIG_SIZE" | bc 2>/dev/null || echo "?")
+    pass_msg "Compressed: ${RATIO}% of original"
 else
-    fail_msg "Store chunks directory missing"
+    warn_msg "Ratio unavailable (orig=$ORIG_SIZE, store=$STORE_SIZE)"
 fi
 
-# ── Test 9: Backup non-existent VM ID ──────────────────────────────
+# ── Test 9: Error — non-existent VM ────────────────────────────────
 echo ""
-echo "--- Test 9: Error — backup non-existent VM ---"
-# Force proxmox hypervisor (not auto) so qm suspend 99999 actually fails
-if $RMRF backup "$DISK_PATH" -s "$STORE" --vm 99999 --hypervisor proxmox 2>&1 | grep -qiE "error|not found|no such|failed"; then
-    pass_msg "Non-existent VM ID: handled gracefully"
-else
-    fail_msg "Non-existent VM ID: should print error"
-fi
+echo "--- Test 9: Error — non-existent VM ---"
+ERR_HV="--hypervisor proxmox"
+[ "$LXC" = true ] && ERR_HV="--hypervisor proxmox-lxc"
+$RMRF backup --vm 99999 $ERR_HV -s "$STORE" 2>&1 | grep -qiE "error|not found|failed" \
+    && pass_msg "Non-existent VM: error handled" || fail_msg "Non-existent VM: no error"
 
-# ── Test 10: Backup non-existent disk path ─────────────────────────
+# ── Test 10: Error — non-existent disk ─────────────────────────────
 echo ""
-echo "--- Test 10: Error — backup non-existent disk ---"
-if $RMRF backup /dev/pve/non-existent-disk -s "$STORE" --vm "$VMID" --no-suspend 2>&1 | grep -qiE "error|not found|no such"; then
-    pass_msg "Non-existent disk path: handled gracefully"
-else
-    fail_msg "Non-existent disk path: should print error"
-fi
+echo "--- Test 10: Error — non-existent disk ---"
+$RMRF backup /dev/pve/nonexistent-disk -s "$STORE" --vm "$VMID" --no-suspend 2>&1 | grep -qiE "error|not found|no such" \
+    && pass_msg "Bad disk path: error handled" || fail_msg "Bad disk path: no error"
 
-# ── Test 11: Safety — refuse restore to original disk path ─────────
+# ── Test 11: Safety — refuse restore to original ───────────────────
 echo ""
-echo "--- Test 11: Safety — restore to original disk ---"
-# SAFETY: We do NOT execute the restore to the original disk path.
-# That would overwrite the live VM disk. Instead, we check if rmrf
-# has a --force flag and refuses without it.
-if $RMRF restore --help 2>&1 | grep -qi -- "--force"; then
-    if $RMRF restore "$MANIFEST" -s "$STORE" -o "$DISK_PATH" 2>&1 | grep -qiE "refuse|overwrite|exists|force"; then
-        pass_msg "Restore to original disk: refused without --force (safe)"
-    else
-        fail_msg "Restore to original disk: rmrf did NOT refuse (dangerous, but we did NOT execute)"
-    fi
+echo "--- Test 11: Safety — restore to original refused ---"
+SRC_PATH=$(echo "$INFO_OUT" | grep -i "^Source path:" | sed 's/^[^:]*: *//')
+if [ -n "$SRC_PATH" ]; then
+    $RMRF restore "$MANIFEST" -s "$STORE" -o "$SRC_PATH" 2>&1 | grep -qiE "refuse|overwrite|exists|force" \
+        && pass_msg "Restore to original: refused (safe)" || fail_msg "Restore to original: NOT refused"
 else
-    warn_msg "rmrf restore has no --force flag: skipping dangerous test (would overwrite live disk)"
+    warn_msg "Source path unknown, skipping"
 fi
 
-# ── Test 12: Error — restore with non-existent store ───────────────
+# ── Test 12: Error — bad store ─────────────────────────────────────
 echo ""
-echo "--- Test 12: Error — restore with bad store ---"
-if $RMRF restore "$MANIFEST" -s /tmp/rmrf-nonexistent-store -o /tmp/rmrf-dummy-out 2>&1 | grep -qiE "error|not found|no such"; then
-    pass_msg "Restore with bad store: handled gracefully"
-else
-    fail_msg "Restore with bad store: should print error"
-fi
+echo "--- Test 12: Error — bad store ---"
+$RMRF restore "$MANIFEST" -s /tmp/rmrf-nonexistent-store -o /tmp/rmrf-dummy 2>&1 | grep -qiE "error|not found|no such" \
+    && pass_msg "Bad store: error handled" || fail_msg "Bad store: no error"
 
-# ── Test 13: Store structure (manifests + chunks dirs) ─────────────
+# ── Test 13: Store structure ───────────────────────────────────────
 echo ""
-echo "--- Test 13: Store directory structure ---"
-if [ -d "$STORE/manifests" ] && [ -d "$STORE/chunks" ] && [ -f "$STORE/index.bincode" ] 2>/dev/null; then
-    pass_msg "Store has manifests/, chunks/, index.bincode"
+echo "--- Test 13: Store structure ---"
+if [ -d "$STORE/manifests" ] && [ -d "$STORE/chunks" ] && [ -f "$STORE/index.bincode" ]; then
+    pass_msg "manifests/ + chunks/ + index.bincode"
 else
-    fail_msg "Store missing required directories or index"
+    fail_msg "Missing store directories"
 fi
 
-# ── Cleanup done by trap ──────────────────────────────────────────
-
+# ── Summary ────────────────────────────────────────────────────────
 echo ""
 echo "=========================="
 echo "Results: $pass pass, $fail fail"
-if [ "$fail" -eq 0 ]; then
-    echo -e "${GREEN}All Proxmox tests passed!${NC}"
-else
-    echo -e "${RED}$fail test(s) failed${NC}"
-fi
+[ "$fail" -eq 0 ] && echo -e "${GREEN}All Proxmox tests passed!${NC}" || echo -e "${RED}$fail test(s) failed${NC}"
 exit $fail

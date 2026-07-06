@@ -60,20 +60,11 @@ run_script "$SCRIPT_DIR/test_sizes.sh"
 run_script "$SCRIPT_DIR/test_errors.sh"
 run_script "$SCRIPT_DIR/test_vm_mock.sh"
 
-# Proxmox integration test: only runs on actual Proxmox host (root + qm available)
+# Proxmox integration test: requires root + qm + a real VM ID (run manually)
 if command -v qm &>/dev/null && command -v pvesm &>/dev/null && [ "$(id -u)" -eq 0 ]; then
-    echo -e "${BLUE}━━━ Running: test_proxmox.sh (--create-test-vm) ━━━${NC}"
-    if bash "$SCRIPT_DIR/test_proxmox.sh" --create-test-vm; then
-        ((overall_pass++))
-        echo -e "${GREEN}✓ test_proxmox.sh PASSED${NC}"
-    else
-        ((overall_fail++))
-        echo -e "${RED}✗ test_proxmox.sh FAILED${NC}"
-    fi
-    echo ""
+    echo -e "${YELLOW}━━━ SKIP: test_proxmox.sh (run manually: sudo ./test_proxmox.sh <vmid>) ━━━${NC}"
 else
     echo -e "${YELLOW}━━━ SKIP: test_proxmox.sh (not on Proxmox host) ━━━${NC}"
-    echo ""
 fi
 
 echo -e "${BLUE}╔══════════════════════════════╗${NC}"
