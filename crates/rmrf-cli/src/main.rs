@@ -6,6 +6,7 @@ use rmrf_source::FileSource;
 use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore, PersistentDedupIndex};
 use std::fs;
 use std::collections::HashSet;
+use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -103,13 +104,85 @@ fn main() {
 }
 
 fn backup(source: &Path, store_dir: &Path) {
+    if source.is_dir() {
+        backup_dir(source, store_dir);
+    } else {
+        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+        let basename = source
+            .file_name()
+            .unwrap_or(source.as_os_str())
+            .to_string_lossy()
+            .to_string();
+        backup_file(source, store_dir, &timestamp, &basename);
+    }
+}
+
+fn backup_dir(dir: &Path, store_dir: &Path) {
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    println!("Backup directory: {}", dir.display());
+
+    let files = match walk_files(dir) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error reading directory: {e}");
+            return;
+        }
+    };
+    println!("Found {} files", files.len());
+
+    let mut total_chunks = 0u64;
+    let mut total_bytes = 0u64;
+    let mut total_skipped = 0u64;
+    let mut total_files = 0u64;
+
+    for path in &files {
+        let rel = path
+            .strip_prefix(dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('/', "_");
+        let (chunks, bytes, skipped) = backup_file(path, store_dir, &timestamp, &rel);
+        total_chunks += chunks;
+        total_bytes += bytes;
+        total_skipped += skipped;
+        total_files += 1;
+    }
+
+    println!();
+    println!("Directory backup complete!");
+    println!("Files: {total_files}");
+    println!("Chunks: {total_chunks}");
+    println!("Total bytes: {total_bytes}");
+    println!("Dedup skipped (already stored): {total_skipped}");
+}
+
+fn walk_files(dir: &Path) -> Result<Vec<PathBuf>, io::Error> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = path.file_name();
+        if name.is_none_or(|n| n.to_string_lossy().starts_with('.')) {
+            continue;
+        }
+        if path.is_dir() {
+            files.extend(walk_files(&path)?);
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str) -> (u64, u64, u64) {
     println!("Backup: {}", source.display());
 
     let file_source = match FileSource::new(source) {
         Ok(fs) => fs,
         Err(e) => {
             eprintln!("Error opening file: {}", e);
-            return;
+            return (0, 0, 0);
         }
     };
     let metadata = file_source.metadata();
@@ -121,7 +194,7 @@ fn backup(source: &Path, store_dir: &Path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error creating chunk store: {}", e);
-            return;
+            return (0, 0, 0);
         }
     };
     let mut chunk_store = CompressedChunkStore::new(local_store);
@@ -130,7 +203,7 @@ fn backup(source: &Path, store_dir: &Path) {
         Ok(idx) => idx,
         Err(e) => {
             eprintln!("Error: failed to load dedup index: {e}");
-            return;
+            return (0, 0, 0);
         }
     };
 
@@ -145,7 +218,7 @@ fn backup(source: &Path, store_dir: &Path) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Error reading chunk: {}", e);
-                return;
+                return (0, 0, 0);
             }
         };
         let data = &chunk.data;
@@ -160,7 +233,7 @@ fn backup(source: &Path, store_dir: &Path) {
                 Ok(loc) => loc,
                 Err(e) => {
                     eprintln!("Error storing chunk: {}", e);
-                    return;
+                    return (0, 0, 0);
                 }
             };
             let _ = dedup_index.insert(&hash, location, uncompressed, uncompressed);
@@ -173,9 +246,6 @@ fn backup(source: &Path, store_dir: &Path) {
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
 
-    let manifests_dir = store_dir.join("manifests");
-    let _ = fs::create_dir_all(&manifests_dir);
-
     if let Err(e) = dedup_index.save() {
         eprintln!("Warning: failed to save dedup index: {e}");
     }
@@ -185,11 +255,9 @@ fn backup(source: &Path, store_dir: &Path) {
         source: metadata,
         chunks: chunk_hashes,
     };
-    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let basename = source
-        .file_name()
-        .unwrap_or(source.as_os_str())
-        .to_string_lossy();
+    let basename = label;
+    let manifests_dir = store_dir.join("manifests");
+    let _ = fs::create_dir_all(&manifests_dir);
     let manifest_path = manifests_dir.join(format!("{timestamp}-{basename}.bincode"));
 
     match manifest.save(&manifest_path) {
@@ -200,6 +268,8 @@ fn backup(source: &Path, store_dir: &Path) {
     println!("Chunks: {}", chunk_count);
     println!("Total bytes: {}", total_bytes);
     println!("Dedup skipped (already stored): {}", dedup_skipped);
+
+    (chunk_count, total_bytes, dedup_skipped)
 }
 
 fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>) {
