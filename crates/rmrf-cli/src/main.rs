@@ -124,10 +124,34 @@ fn backup(source: &Path, store_dir: &Path) {
     println!("Total bytes: {}", total_bytes);
 }
 
-fn restore(manifest_path: &Path, store_dir: &Path) {
-    println!("Restore: {}", manifest_path.display());
+fn restore(dest: &Path, store_dir: &Path) {
+    println!("Restore: {}", dest.display());
+    let manifests_dir = store_dir.join("manifests");
+    let mut latest_manifest: Option<PathBuf> = None;
 
-    let manifest = match Manifest::load(manifest_path) {
+    if let Ok(entries) = fs::read_dir(&manifests_dir) {
+        for entry in entries.flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    let path = entry.path();
+                    if path.extension().map_or(false, |ext| ext == "bincode") {
+                        latest_manifest = Some(path);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let manifest_path = match latest_manifest {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: no manifest found in store");
+            return;
+        }
+    };
+
+    let manifest = match Manifest::load(&manifest_path) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("Error loading manifest: {}", e);
@@ -146,22 +170,12 @@ fn restore(manifest_path: &Path, store_dir: &Path) {
     let chunk_store = CompressedChunkStore::new(local_store);
 
     if manifest.chunks.is_empty() {
-        let output_name = manifest_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(|s| s.find('-').map(|i| &s[i + 1..]))
-            .unwrap_or("restored");
-        fs::write(output_name, b"").ok();
-        println!("Restored empty file: {output_name}");
+        fs::write(dest, b"").ok();
+        println!("Restored empty file: {}", dest.display());
         return;
     }
 
-    let output_name = manifest_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .and_then(|s| s.find('-').map(|i| &s[i + 1..]))
-        .unwrap_or("restored");
-    let output_path = PathBuf::from(output_name);
+    let output_path = dest.to_path_buf();
 
     match restore_file(&manifest, &chunk_store, &output_path) {
         Ok(_) => println!("Restore complete: {}", output_path.display()),

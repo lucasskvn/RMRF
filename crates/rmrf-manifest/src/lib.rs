@@ -1,5 +1,3 @@
-// rmrf-manifest: load/save/validate Manifest via bincode
-
 use rmrf_core::{Hash, Result, SilexError, SourceMetadata};
 use serde::{Deserialize, Serialize};
 use std::fs;

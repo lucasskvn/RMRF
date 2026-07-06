@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::io;
 
-// ── Erreur ────────────────────────────────────────────────────────
-
 pub type Result<T> = std::result::Result<T, SilexError>;
 
 #[derive(Debug, thiserror::Error)]
@@ -12,8 +10,6 @@ pub enum SilexError {
     #[error("{0}")]
     Msg(String),
 }
-
-// ── Types partagés ────────────────────────────────────────────────
 
 pub type Hash = [u8; 32];
 
@@ -60,8 +56,6 @@ pub struct IndexEntry {
     pub compressed_size: u32,
 }
 
-// ── Traits ────────────────────────────────────────────────────────
-
 pub trait Source {
     fn metadata(&self) -> SourceMetadata;
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
@@ -88,13 +82,10 @@ pub trait DedupIndex {
     fn decrement_refcount(&mut self, hash: &Hash) -> Result<u64>;
 }
 
-// ── Tests ─────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use crate::*;
 
-    // ── Types ──────────────────────────────────────────────────────
 
     #[test]
     fn source_id_from_string() {
@@ -152,8 +143,6 @@ mod tests {
         assert_eq!(hash.len(), 32);
     }
 
-    // ── Traits (conformité des signatures) ────────────────────────
-
     #[test]
     fn source_trait_methods() {
         fn _assert(_s: &dyn Source) {
@@ -210,8 +199,6 @@ mod tests {
             }
         }
     }
-
-    // ── Erreur ─────────────────────────────────────────────────────
 
     #[test]
     fn error_type_display() {

@@ -132,8 +132,6 @@ impl DedupIndex for MemoryDedupIndex {
     }
 }
 
-// ── CompressedChunkStore ───────────────────────────────────────────
-
 pub struct CompressedChunkStore<S: ChunkStore> {
     inner: S,
     compression_level: i32,
