@@ -184,7 +184,7 @@ fi
 echo ""
 echo "--- Test 8: Compression ---"
 STORE_SIZE=$(du -sb "$STORE/chunks" 2>/dev/null | cut -f1)
-ORIG_SIZE=$(echo "$INFO_OUT" | grep -i "Source size:" | grep -oE '[0-9]+ bytes' | grep -oE '[0-9]+')
+ORIG_SIZE=$(echo "$INFO_OUT" | grep -i "Source size:" | grep -oE '[0-9]+' | head -1)
 if [ -n "$ORIG_SIZE" ] && [ "$STORE_SIZE" -lt "$ORIG_SIZE" ]; then
     if command -v bc &>/dev/null; then
         RATIO=$(echo "scale=1; 100 * $STORE_SIZE / $ORIG_SIZE" | bc)
