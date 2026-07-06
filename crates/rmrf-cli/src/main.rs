@@ -1,41 +1,50 @@
-/*
-** EPITECH PROJECT, 2026
-** RMRF
-** File description:
-** main.rs
-*/
-
 use rmrf_core::{ChunkStore, Source};
+use rmrf_manifest::Manifest;
 use rmrf_source::FileSource;
-use rmrf_store::{LocalChunkStore, hash_data};
+use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 const CHUNK_SIZE: usize = 8192;
 
-fn main()
-{
+fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 3 {
-        println!("Usage: rmrf <backup|restore> <path> [store_dir]");
-        return;
+    if args.len() < 2 {
+        eprintln!("Error: no command");
+        eprintln!("Usage: rmrf <backup|restore> <path> [store_dir]");
+        std::process::exit(1);
     }
     let cmd = &args[1];
+
+    if cmd != "backup" && cmd != "restore" {
+        eprintln!("Unknown command: {cmd}");
+        eprintln!("Usage: rmrf <backup|restore> <path> [store_dir]");
+        std::process::exit(1);
+    }
+
+    if args.len() < 3 {
+        eprintln!("Error: missing path argument for '{cmd}'");
+        eprintln!("Usage: rmrf {cmd} <path> [store_dir]");
+        std::process::exit(1);
+    }
     let path = PathBuf::from(&args[2]);
-    let store_dir = args.get(3).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("./rmrf-store"));
+    let store_dir = args
+        .get(3)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("./rmrf-store"));
 
     match cmd.as_str() {
         "backup" => backup(&path, &store_dir),
         "restore" => restore(&path, &store_dir),
-        _ => println!("Unknown command: {}", cmd),
+        _ => unreachable!(),
     }
 }
 
-fn backup(source: &PathBuf, store_dir: &PathBuf)
-{
-    println!("Backup: {]", source.display());
+fn backup(source: &Path, store_dir: &Path) {
+    println!("Backup: {}", source.display());
 
     let mut file_source = match FileSource::new(source) {
         Ok(fs) => fs,
@@ -46,14 +55,20 @@ fn backup(source: &PathBuf, store_dir: &PathBuf)
     };
     let metadata = file_source.metadata();
     println!("File size: {} bytes", metadata.size);
-    let mut store = match LocalChunkStore::new(store_dir.clone()) {
+
+    let chunks_dir = store_dir.join("chunks");
+    let _ = fs::create_dir_all(&chunks_dir);
+    let local_store = match LocalChunkStore::new(chunks_dir) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Error creating store: {}", e);
+            eprintln!("Error creating chunk store: {}", e);
             return;
         }
     };
+    let mut chunk_store = CompressedChunkStore::new(local_store);
+
     let mut buffer = vec![0u8; CHUNK_SIZE];
+    let mut chunk_hashes: Vec<[u8; 32]> = Vec::new();
     let mut chunk_count = 0;
     let mut total_bytes = 0;
 
@@ -64,10 +79,11 @@ fn backup(source: &PathBuf, store_dir: &PathBuf)
                 let data = &buffer[..n];
                 let hash = hash_data(data);
 
-                if let Err(e) = store.put(&hash, data) {
+                if let Err(e) = chunk_store.put(&hash, data) {
                     eprintln!("Error storing chunk: {}", e);
                     return;
                 }
+                chunk_hashes.push(hash);
                 chunk_count += 1;
                 total_bytes += n as u64;
                 print!(".");
@@ -79,35 +95,104 @@ fn backup(source: &PathBuf, store_dir: &PathBuf)
             }
         }
     }
-    println!("\nBackup complete!");
+
+    let manifests_dir = store_dir.join("manifests");
+    let _ = fs::create_dir_all(&manifests_dir);
+    let manifest = Manifest {
+        version: 1,
+        source: metadata,
+        chunks: chunk_hashes,
+    };
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let basename = source
+        .file_name()
+        .unwrap_or(source.as_os_str())
+        .to_string_lossy();
+    let manifest_path = manifests_dir.join(format!("{timestamp}-{basename}.bincode"));
+
+    match manifest.save(&manifest_path) {
+        Ok(_) => println!("\nManifest saved: {}", manifest_path.display()),
+        Err(e) => eprintln!("Error saving manifest: {}", e),
+    }
+    println!("Backup complete!");
     println!("Chunks: {}", chunk_count);
     println!("Total bytes: {}", total_bytes);
-    println!("Store: {}", store_dir.display());
 }
 
-fn restore(dest: &PathBuf, store_dir: &PathBuf)
-{
-    println!("Restore: {}", dest.display());
-    println!("From store: {}", store_dir.display());
+fn restore(manifest_path: &Path, store_dir: &Path) {
+    println!("Restore: {}", manifest_path.display());
 
-    match fs::read_dir(store_dir) {
-        Ok(entries) => {
-            let mut chunk_count = 0;
-            for dir_entry in entries {
-                if let Ok(entry) = dir_entry {
-                    if entry.path().is_dir() {
-                        if let Ok(files) = fs::read_dir(entry.path()) {
-                            for file_entry in files {
-                                if let Ok(_) = file_entry {
-                                    chunk_count += 1;
-                                }
-                            }
-                        }
-                    }
+    let manifest = match Manifest::load(manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Error loading manifest: {}", e);
+            return;
+        }
+    };
+
+    let chunks_dir = store_dir.join("chunks");
+    let local_store = match LocalChunkStore::new(chunks_dir) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error opening chunk store: {}", e);
+            return;
+        }
+    };
+    let chunk_store = CompressedChunkStore::new(local_store);
+
+    if manifest.chunks.is_empty() {
+        let output_name = manifest_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.find('-').map(|i| &s[i + 1..]))
+            .unwrap_or("restored");
+        fs::write(output_name, b"").ok();
+        println!("Restored empty file: {output_name}");
+        return;
+    }
+
+    let output_name = manifest_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.find('-').map(|i| &s[i + 1..]))
+        .unwrap_or("restored");
+    let output_path = PathBuf::from(output_name);
+
+    match restore_file(&manifest, &chunk_store, &output_path) {
+        Ok(_) => println!("Restore complete: {}", output_path.display()),
+        Err(e) => eprintln!("Restore failed: {}", e),
+    }
+}
+
+fn restore_file(
+    manifest: &Manifest,
+    store: &dyn ChunkStore,
+    dest: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut output = fs::File::create(dest)?;
+    let total = manifest.chunks.len();
+
+    for (i, hash) in manifest.chunks.iter().enumerate() {
+        match store.get(hash)? {
+            Some(data) => {
+                output.write_all(&data)?;
+                if total > 10 && i % (total / 10) == 0 {
+                    print!("\rProgress: {}%", (i * 100) / total);
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
                 }
             }
-            println!("Found {} chunks to restore", chunk_count);
+            None => {
+                eprintln!("\nError: chunk {:?} not found in store", &hash[..4]);
+                return Err("chunk not found".into());
+            }
         }
-        Err(e) => eprintln!("Error reading store: {}", e),
     }
+
+    if total > 10 {
+        println!("\rProgress: 100%");
+    }
+    println!("Total chunks restored: {total}");
+    println!("Total size: {} bytes", manifest.source.size);
+
+    Ok(())
 }

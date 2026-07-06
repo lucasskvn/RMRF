@@ -12,3 +12,5 @@ path = "src/main.rs"
 rmrf-core = { path = "../rmrf-core" }
 rmrf-source = { path = "../rmrf-source" }
 rmrf-store = { path = "../rmrf-store" }
+rmrf-manifest = { path = "../rmrf-manifest" }
+chrono = { version = "0.4", features = ["clock"] }

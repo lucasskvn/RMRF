@@ -17,10 +17,10 @@ pub enum SilexError {
 
 pub type Hash = [u8; 32];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SourceId(pub String);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SourceType {
     File,
     VmDisk {
@@ -30,13 +30,13 @@ pub enum SourceType {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DiskFormat {
     Raw,
     Qcow2,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SourceMetadata {
     pub id: SourceId,
     pub path: String,
@@ -46,13 +46,13 @@ pub struct SourceMetadata {
     pub source_type: SourceType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChunkLocation {
     pub prefix: String,
     pub filename: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IndexEntry {
     pub location: ChunkLocation,
     pub refcount: u64,

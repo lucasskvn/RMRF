@@ -8,3 +8,4 @@ publish = false
 rmrf-core = { path = "../rmrf-core" }
 sha2 = "0.10"
 hex = "0.4"
+zstd = "0.13"
