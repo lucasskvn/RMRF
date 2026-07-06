@@ -11,7 +11,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-RMRF="cargo run --manifest-path "$PROJECT_DIR/Cargo.toml" --quiet"
+
+# Use installed binary if available, otherwise cargo run
+if command -v rmrf &>/dev/null; then
+    RMRF="rmrf"
+elif [ -x /usr/local/bin/rmrf ]; then
+    RMRF="/usr/local/bin/rmrf"
+else
+    RMRF="cargo run --manifest-path $PROJECT_DIR/Cargo.toml --quiet"
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -46,6 +54,17 @@ done
 cleanup() {
     echo ""
     echo "--- Cleanup ---"
+
+    # Safety: if VM was running and backup was supposed to suspend it, ensure it's back
+    if [ -n "${VMID:-}" ] && [ "${VM_WAS_RUNNING:-false}" = true ] && [ -z "${SUSPEND_FLAG:-}" ]; then
+        local after
+        after=$(qm status "$VMID" 2>/dev/null || echo "unknown")
+        if echo "$after" | grep -qiE "suspended|paused"; then
+            echo "WARNING: VM $VMID was left suspended — resuming"
+            qm resume "$VMID" 2>/dev/null || true
+        fi
+    fi
+
     if [ "$CREATE_TEST_VM" = true ]; then
         # Check if VM 9000 exists and stop/destroy it
         if qm status 9000 &>/dev/null 2>&1; then
@@ -173,8 +192,12 @@ fi
 # Get original size for compression ratio check
 ORIG_SIZE_BYTES=$(stat --format=%s "$DISK_PATH" 2>/dev/null || echo "unknown")
 
-# Record VM status before backup (for suspend test)
+# ── Record pre-backup state for safety ──────────────────────────────
+VM_WAS_RUNNING=false
 STATUS_BEFORE=$(qm status "$VMID" 2>/dev/null)
+if echo "$STATUS_BEFORE" | grep -qi "running"; then
+    VM_WAS_RUNNING=true
+fi
 
 # ── Test 1: Backup with real qm suspend/resume ─────────────────────
 echo ""
@@ -183,8 +206,10 @@ BACKUP_ARGS=("$DISK_PATH" -s "$STORE" --vm "$VMID" --disk-name "scsi0")
 if [ -n "$SUSPEND_FLAG" ]; then
     BACKUP_ARGS+=("$SUSPEND_FLAG")
 fi
+set +e  # don't exit on backup failure — captures error output
 BACKUP_OUTPUT=$($RMRF backup "${BACKUP_ARGS[@]}" 2>&1 >/dev/null)
 BACKUP_RC=$?
+set -e
 if [ $BACKUP_RC -eq 0 ]; then
     pass_msg "Backup with --vm $VMID succeeded"
 else
@@ -195,7 +220,7 @@ else
 fi
 
 # Count manifests
-MANIFEST=$(ls -t "$STORE/manifests/"*.bincode 2>/dev/null | head -1)
+MANIFEST=$(ls -t "$STORE/manifests/"*.bincode 2>/dev/null | head -1) || true
 
 # ── Test 2: VM status after backup ─────────────────────────────────
 echo ""
