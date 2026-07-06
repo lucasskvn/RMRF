@@ -1,9 +1,10 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use fastcdc::v2016::StreamCDC;
-use rmrf_core::{ChunkStore, DedupIndex, Source};
+use rmrf_core::{ChunkStore, DedupIndex, DiskFormat, Source};
 use rmrf_manifest::Manifest;
-use rmrf_source::FileSource;
+use rmrf_source::{FileSource, LibvirtLifecycle, NoopLifecycle, ProxmoxLifecycle, VmLifecycle, VmSource};
 use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore, PersistentDedupIndex};
+use std::fmt;
 use std::fs;
 use std::collections::HashSet;
 use std::io;
@@ -11,6 +12,32 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_STORE: &str = "./rmrf-store";
+
+#[derive(ValueEnum, Clone)]
+enum Hypervisor {
+    Auto,
+    Proxmox,
+    Libvirt,
+    Noop,
+}
+
+impl fmt::Display for Hypervisor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Hypervisor::Auto => write!(f, "auto"),
+            Hypervisor::Proxmox => write!(f, "proxmox"),
+            Hypervisor::Libvirt => write!(f, "libvirt"),
+            Hypervisor::Noop => write!(f, "noop"),
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone)]
+enum DiskFormatArg {
+    Auto,
+    Raw,
+    Qcow2,
+}
 
 #[derive(Parser)]
 #[command(name = "rmrf", about = "RMRF backup tool — chunk-based deduplicated backups")]
@@ -21,9 +48,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a backup of a file
+    /// Create a backup of a file or VM disk
     Backup {
-        /// Path to the file to backup
+        /// Path to the file or VM disk to backup
         path: PathBuf,
         /// Store directory (default: ./rmrf-store)
         #[arg(short, long, default_value = DEFAULT_STORE)]
@@ -31,6 +58,21 @@ enum Command {
         /// Delete manifests older than N days after backup, then run GC
         #[arg(long)]
         retain: Option<u64>,
+        /// VM ID for Proxmox/Libvirt VM backup (suspends VM, reads disk, resumes VM)
+        #[arg(long)]
+        vm: Option<String>,
+        /// Disk name for VM metadata (default: basename of path)
+        #[arg(long)]
+        disk_name: Option<String>,
+        /// Disk format: auto (detect from extension), raw, or qcow2
+        #[arg(long, default_value = "auto")]
+        format: DiskFormatArg,
+        /// Skip VM suspend/resume (useful for already-snapshotted disks)
+        #[arg(long)]
+        no_suspend: bool,
+        /// Hypervisor type for VM backup
+        #[arg(long, default_value = "auto")]
+        hypervisor: Hypervisor,
     },
     /// Restore a file from a backup manifest
     Restore {
@@ -82,8 +124,34 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Backup { path, store, retain } => {
-            backup(&path, &store);
+        Command::Backup {
+            path,
+            store,
+            retain,
+            vm,
+            disk_name,
+            format,
+            no_suspend,
+            hypervisor,
+        } => {
+            let format = parse_disk_format(&format, &path);
+            let lifecycle = if no_suspend {
+                Box::new(NoopLifecycle) as Box<dyn VmLifecycle>
+            } else {
+                build_vm_lifecycle(vm.as_deref(), &hypervisor)
+            };
+
+            if let Some(vm_id) = vm {
+                let disk = disk_name.as_deref().unwrap_or_else(|| {
+                    path.file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("disk")
+                });
+                backup_vm(&path, &store, &vm_id, disk, format, lifecycle);
+            } else {
+                backup(&path, &store);
+            }
+
             if let Some(days) = retain {
                 run_retention_and_gc(&store, days);
             }
@@ -270,6 +338,165 @@ fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str) ->
     println!("Dedup skipped (already stored): {}", dedup_skipped);
 
     (chunk_count, total_bytes, dedup_skipped)
+}
+
+fn parse_disk_format(arg: &DiskFormatArg, path: &Path) -> DiskFormat {
+    match arg {
+        DiskFormatArg::Auto => {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if ext.eq_ignore_ascii_case("qcow2") {
+                    return DiskFormat::Qcow2;
+                }
+            }
+            DiskFormat::Raw
+        }
+        DiskFormatArg::Raw => DiskFormat::Raw,
+        DiskFormatArg::Qcow2 => DiskFormat::Qcow2,
+    }
+}
+
+fn detect_hypervisor(vm_id: &str) -> Hypervisor {
+    if std::process::Command::new("qm")
+        .args(["status", vm_id])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return Hypervisor::Proxmox;
+    }
+    if std::process::Command::new("virsh")
+        .args(["dominfo", vm_id])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return Hypervisor::Libvirt;
+    }
+    Hypervisor::Noop
+}
+
+fn build_vm_lifecycle(vm_id: Option<&str>, hypervisor: &Hypervisor) -> Box<dyn VmLifecycle> {
+    let hv = match hypervisor {
+        Hypervisor::Auto => {
+            if let Some(id) = vm_id {
+                detect_hypervisor(id)
+            } else {
+                Hypervisor::Noop
+            }
+        }
+        Hypervisor::Proxmox => Hypervisor::Proxmox,
+        Hypervisor::Libvirt => Hypervisor::Libvirt,
+        Hypervisor::Noop => Hypervisor::Noop,
+    };
+    match hv {
+        Hypervisor::Proxmox => Box::new(ProxmoxLifecycle),
+        Hypervisor::Libvirt => Box::new(LibvirtLifecycle),
+        _ => Box::new(NoopLifecycle),
+    }
+}
+
+fn backup_vm(
+    path: &Path,
+    store_dir: &Path,
+    vm_id: &str,
+    disk_name: &str,
+    format: DiskFormat,
+    lifecycle: Box<dyn VmLifecycle>,
+) {
+    let vm_source = match VmSource::open(path, vm_id, disk_name, format, lifecycle) {
+        Ok(vs) => vs,
+        Err(e) => {
+            eprintln!("Error opening VM source: {e}");
+            return;
+        }
+    };
+    let metadata = vm_source.metadata();
+
+    let chunks_dir = store_dir.join("chunks");
+    let _ = fs::create_dir_all(&chunks_dir);
+    let local_store = match LocalChunkStore::new(chunks_dir) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error creating chunk store: {e}");
+            return;
+        }
+    };
+    let mut chunk_store = CompressedChunkStore::new(local_store);
+    let index_path = store_dir.join("index.bincode");
+    let mut dedup_index = match PersistentDedupIndex::new(index_path) {
+        Ok(idx) => idx,
+        Err(e) => {
+            eprintln!("Error: failed to load dedup index: {e}");
+            return;
+        }
+    };
+
+    let chunker = StreamCDC::new(vm_source, 4096, 16384, 65536);
+    let mut chunk_hashes: Vec<[u8; 32]> = Vec::new();
+    let mut chunk_count = 0;
+    let mut total_bytes = 0;
+    let mut dedup_skipped = 0u64;
+
+    for chunk_result in chunker {
+        let chunk = match chunk_result {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error reading chunk: {e}");
+                return;
+            }
+        };
+        let data = &chunk.data;
+        let hash = hash_data(data);
+
+        if let Ok(Some(_entry)) = dedup_index.lookup(&hash) {
+            let _ = dedup_index.increment_refcount(&hash);
+            dedup_skipped += 1;
+        } else {
+            let uncompressed = data.len() as u32;
+            let location = match chunk_store.put(&hash, data) {
+                Ok(loc) => loc,
+                Err(e) => {
+                    eprintln!("Error storing chunk: {e}");
+                    return;
+                }
+            };
+            let _ = dedup_index.insert(&hash, location, uncompressed, uncompressed);
+        }
+
+        chunk_hashes.push(hash);
+        chunk_count += 1;
+        total_bytes += data.len() as u64;
+        print!(".");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+    }
+
+    let manifests_dir = store_dir.join("manifests");
+    let _ = fs::create_dir_all(&manifests_dir);
+
+    if let Err(e) = dedup_index.save() {
+        eprintln!("Warning: failed to save dedup index: {e}");
+    }
+
+    let manifest = Manifest {
+        version: rmrf_manifest::MANIFEST_VERSION,
+        source: metadata,
+        chunks: chunk_hashes,
+    };
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let basename = path
+        .file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy();
+    let manifest_path = manifests_dir.join(format!("{timestamp}-{basename}.bincode"));
+
+    match manifest.save(&manifest_path) {
+        Ok(_) => println!("\nManifest saved: {}", manifest_path.display()),
+        Err(e) => eprintln!("Error saving manifest: {e}"),
+    }
+    println!("Backup complete!");
+    println!("Chunks: {}", chunk_count);
+    println!("Total bytes: {}", total_bytes);
+    println!("Dedup skipped (already stored): {}", dedup_skipped);
 }
 
 fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>) {
