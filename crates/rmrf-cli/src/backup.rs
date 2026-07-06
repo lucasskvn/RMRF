@@ -115,7 +115,7 @@ pub fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str
 
     pb.set_style(
         ProgressStyle::with_template("{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
-            .unwrap()
+            .unwrap_or_else(|_| ProgressStyle::default_spinner())
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
     );
 
@@ -226,7 +226,7 @@ pub fn backup_vm(
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::with_template("{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
-            .unwrap()
+            .unwrap_or_else(|_| ProgressStyle::default_spinner())
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
     );
 

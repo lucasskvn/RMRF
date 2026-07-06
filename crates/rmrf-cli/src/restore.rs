@@ -68,7 +68,7 @@ pub fn restore_file(
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
         ProgressStyle::with_template("{bar:30.cyan/blue} {pos}/{len} chunks")
-            .unwrap()
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
             .progress_chars("=> "),
     );
 

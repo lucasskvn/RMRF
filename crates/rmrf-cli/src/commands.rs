@@ -33,7 +33,7 @@ pub fn list(store_dir: &Path) {
                 continue;
             }
         };
-        let basename = path.file_name().unwrap().to_string_lossy();
+        let basename = path.file_name().unwrap_or_default().to_string_lossy();
         let timestamp = basename.split('-').next().unwrap_or("unknown");
         println!(
             "{}  {:>9}  {:>4} chunks  {}",
@@ -214,7 +214,7 @@ pub fn run_retention_and_gc(store_dir: &Path, days: u64) {
             if path.extension().is_none_or(|ext| ext != "bincode") {
                 continue;
             }
-            let basename = path.file_name().unwrap().to_string_lossy();
+            let basename = path.file_name().unwrap_or_default().to_string_lossy();
             let ts_str = basename.split('-').next().unwrap_or("");
             let ts = parse_timestamp(ts_str);
             if ts < cutoff {
