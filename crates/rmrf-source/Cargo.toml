@@ -3,3 +3,6 @@ name = "rmrf-source"
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+[dependencies]
+rmrf-core = { path = "../rmrf-core" }

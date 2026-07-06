@@ -7,3 +7,8 @@ publish = false
 [[bin]]
 name = "rmrf"
 path = "src/main.rs"
+
+[dependencies]
+rmrf-core = { path = "../rmrf-core" }
+rmrf-source = { path = "../rmrf-source" }
+rmrf-store = { path = "../rmrf-store" }
