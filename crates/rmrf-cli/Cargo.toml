@@ -14,3 +14,4 @@ rmrf-source = { path = "../rmrf-source" }
 rmrf-store = { path = "../rmrf-store" }
 rmrf-manifest = { path = "../rmrf-manifest" }
 chrono = { version = "0.4", features = ["clock"] }
+clap = { version = "4", features = ["derive"] }

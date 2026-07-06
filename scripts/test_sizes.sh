@@ -37,13 +37,13 @@ do_size_test() {
         skip_msg "$label: dd failed"
         return
     }
-    if ! $RMRF -- backup "$INPUT" "$STORE" > /dev/null 2>&1; then
+    if ! $RMRF -- backup "$INPUT" -s "$STORE" > /dev/null 2>&1; then
         fail_msg "$label: backup failed"
         rm -rf "${STORE:?}/"*
         return
     fi
     MANIFEST=$(ls -t "$STORE/manifests/"*.bincode | head -1)
-    if ! $RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1; then
+    if ! $RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1; then
         fail_msg "$label: restore failed"
         rm -rf "${STORE:?}/"*
         return

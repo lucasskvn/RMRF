@@ -30,11 +30,11 @@ mkdir -p "$STORE/chunks"
 dd if=/dev/urandom of="$INPUT" bs=1024 count=256 2>/dev/null  # 256 KB
 
 # Test 1: Double backup, check store size doesn't double
-$RMRF -- backup "$INPUT" "$STORE" > /dev/null
+$RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 chunks_after_first=$(find "$STORE/chunks" -type f 2>/dev/null | wc -l || echo 0)
 store_size_first=$(du -sb "$STORE/chunks" 2>/dev/null | cut -f1 || echo 0)
 
-$RMRF -- backup "$INPUT" "$STORE" > /dev/null
+$RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 chunks_after_second=$(find "$STORE/chunks" -type f 2>/dev/null | wc -l || echo 0)
 store_size_second=$(du -sb "$STORE/chunks" 2>/dev/null | cut -f1 || echo 0)
 
@@ -58,7 +58,7 @@ fi
 
 # Test 2: Restore after second backup, verify bit-identical
 MANIFEST=$(ls -t "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1
+$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
 OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
 if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
     pass_msg "Restore after double backup: bit-identical"

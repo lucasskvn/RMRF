@@ -1,50 +1,64 @@
+use clap::{Parser, Subcommand};
 use rmrf_core::{ChunkStore, DedupIndex, Source};
 use rmrf_manifest::Manifest;
 use rmrf_source::FileSource;
 use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore, PersistentDedupIndex};
-use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const CHUNK_SIZE: usize = 8192;
+const DEFAULT_STORE: &str = "./rmrf-store";
+
+#[derive(Parser)]
+#[command(name = "rmrf", about = "RMRF backup tool — chunk-based deduplicated backups")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Create a backup of a file
+    Backup {
+        /// Path to the file to backup
+        path: PathBuf,
+        /// Store directory (default: ./rmrf-store)
+        #[arg(short, long, default_value = DEFAULT_STORE)]
+        store: PathBuf,
+    },
+    /// Restore a file from a backup manifest
+    Restore {
+        /// Path to the manifest file (.bincode)
+        manifest: PathBuf,
+        /// Store directory (default: ./rmrf-store)
+        #[arg(short, long, default_value = DEFAULT_STORE)]
+        store: PathBuf,
+        /// Output path for the restored file
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Clean test artifacts from the current directory
+    Clean,
+}
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let cli = Cli::parse();
 
-    if args.len() < 2 {
-        eprintln!("Error: no command");
-        eprintln!("Usage: rmrf <backup|restore|clean> [args...]");
-        std::process::exit(1);
-    }
-    let cmd = &args[1];
-
-    if cmd != "backup" && cmd != "restore" && cmd != "clean" {
-        eprintln!("Unknown command: {cmd}");
-        eprintln!("Usage: rmrf <backup|restore|clean> [args...]");
-        std::process::exit(1);
-    }
-
-    if cmd == "clean" {
-        clean();
-        return;
-    }
-
-    if args.len() < 3 {
-        eprintln!("Error: missing path argument for '{cmd}'");
-        eprintln!("Usage: rmrf {cmd} <path> [store_dir]");
-        std::process::exit(1);
-    }
-    let path = PathBuf::from(&args[2]);
-    let store_dir = args
-        .get(3)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("./rmrf-store"));
-
-    match cmd.as_str() {
-        "backup" => backup(&path, &store_dir),
-        "restore" => restore(&path, &store_dir),
-        _ => unreachable!(),
+    match cli.command {
+        Command::Backup { path, store } => {
+            backup(&path, &store);
+        }
+        Command::Restore {
+            manifest,
+            store,
+            output,
+        } => {
+            restore(&manifest, &store, output.as_deref());
+        }
+        Command::Clean => {
+            clean();
+        }
     }
 }
 
@@ -150,40 +164,28 @@ fn backup(source: &Path, store_dir: &Path) {
     println!("Dedup skipped (already stored): {}", dedup_skipped);
 }
 
-fn restore(dest: &Path, store_dir: &Path) {
-    println!("Restore: {}", dest.display());
-    let manifests_dir = store_dir.join("manifests");
-    let mut latest_manifest: Option<PathBuf> = None;
+fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>) {
+    println!("Restore: {}", manifest_path.display());
 
-    if let Ok(entries) = fs::read_dir(&manifests_dir) {
-        for entry in entries.flatten() {
-            if let Ok(metadata) = entry.metadata() {
-                if metadata.is_file() {
-                    let path = entry.path();
-                    if path.extension().is_some_and(|ext| ext == "bincode") {
-                        latest_manifest = Some(path);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    let manifest_path = match latest_manifest {
-        Some(p) => p,
-        None => {
-            eprintln!("Error: no manifest found in store");
-            return;
-        }
-    };
-
-    let manifest = match Manifest::load(&manifest_path) {
+    let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("Error loading manifest: {}", e);
             return;
         }
     };
+
+    let output_path = output.unwrap_or_else(|| {
+        let basename = manifest_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("restored");
+        let name = basename
+            .strip_suffix(".bincode")
+            .unwrap_or(basename);
+        let parts: Vec<&str> = name.splitn(2, '-').collect();
+        Path::new(parts.last().copied().unwrap_or(parts[0]))
+    });
 
     let chunks_dir = store_dir.join("chunks");
     let local_store = match LocalChunkStore::new(chunks_dir) {
@@ -196,14 +198,12 @@ fn restore(dest: &Path, store_dir: &Path) {
     let chunk_store = CompressedChunkStore::new(local_store);
 
     if manifest.chunks.is_empty() {
-        fs::write(dest, b"").ok();
-        println!("Restored empty file: {}", dest.display());
+        fs::write(output_path, b"").ok();
+        println!("Restored empty file: {}", output_path.display());
         return;
     }
 
-    let output_path = dest.to_path_buf();
-
-    match restore_file(&manifest, &chunk_store, &output_path) {
+    match restore_file(&manifest, &chunk_store, output_path) {
         Ok(_) => println!("Restore complete: {}", output_path.display()),
         Err(e) => eprintln!("Restore failed: {}", e),
     }
@@ -258,7 +258,7 @@ fn clean() {
         "input.bin",
         "rmrf_input.txt",
         "-rmrf_input.txt",
-        "écoß测试.txt",
+        "\u{e9}co\u{df}\u{6d4b}\u{8bd5}.txt",
     ];
 
     let mut removed = 0;

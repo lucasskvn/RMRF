@@ -27,9 +27,9 @@ STORE="$TEST_DIR/store"
 do_test() {
     local desc="$1"
     local input="$2"
-    $RMRF -- backup "$input" "$STORE" > /dev/null
+    $RMRF -- backup "$input" -s "$STORE" > /dev/null
     MANIFEST=$(ls -t "$STORE/manifests/"*.bincode | head -1)
-    $RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1
+    $RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
     OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
     if diff "$input" "$OUTPUT" > /dev/null 2>&1; then
         pass_msg "$desc: bit-identical"
@@ -62,9 +62,9 @@ do_test "All 0xFF bytes (1 KB)" "$TEST_DIR/ff_bytes"
 
 # Test 6: Unicode filename
 echo "unicode content" > "$TEST_DIR/écoß测试.txt"
-$RMRF -- backup "$TEST_DIR/écoß测试.txt" "$STORE" > /dev/null
+$RMRF -- backup "$TEST_DIR/écoß测试.txt" -s "$STORE" > /dev/null
 MANIFEST=$(ls -t "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1
+$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
 OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
 if diff "$TEST_DIR/écoß测试.txt" "$OUTPUT" > /dev/null 2>&1; then
     pass_msg "Unicode filename: bit-identical"

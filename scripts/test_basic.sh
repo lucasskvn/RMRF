@@ -28,9 +28,9 @@ STORE="$TEST_DIR/store"
 
 # Test 1: Simple text file
 echo "Hello RMRF - integration test" > "$INPUT"
-$RMRF -- backup "$INPUT" "$STORE" > /dev/null
+$RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1
+$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
 OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
 if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
     pass_msg "Simple text file: backup + restore bit-identical"
@@ -41,9 +41,9 @@ rm -rf "$TEST_DIR"/*
 
 # Test 2: Empty file
 touch "$INPUT"
-$RMRF -- backup "$INPUT" "$STORE" > /dev/null
+$RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1
+$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
 OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
 if [ -f "$OUTPUT" ] && [ ! -s "$OUTPUT" ]; then
     pass_msg "Empty file: restore is empty"
@@ -54,9 +54,9 @@ rm -rf "$TEST_DIR"/*
 
 # Test 3: Single byte
 printf "A" > "$INPUT"
-$RMRF -- backup "$INPUT" "$STORE" > /dev/null
+$RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1
+$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
 OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
 if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
     pass_msg "Single byte file: backup + restore bit-identical"
@@ -67,9 +67,9 @@ rm -rf "$TEST_DIR"/*
 
 # Test 4: File with only null bytes
 dd if=/dev/zero of="$INPUT" bs=1024 count=1 2>/dev/null
-$RMRF -- backup "$INPUT" "$STORE" > /dev/null
+$RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1
+$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
 OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
 if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
     pass_msg "Null bytes (1KB): backup + restore bit-identical"
@@ -80,9 +80,9 @@ rm -rf "$TEST_DIR"/*
 
 # Test 5: Repeated pattern file
 python3 -c "print('AB' * 5000)" > "$INPUT" 2>/dev/null || printf 'AB%.0s' {1..5000} > "$INPUT"
-$RMRF -- backup "$INPUT" "$STORE" > /dev/null
+$RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1
+$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
 OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
 if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
     pass_msg "Repeated pattern: backup + restore bit-identical"
@@ -93,9 +93,9 @@ rm -rf "$TEST_DIR"/*
 
 # Test 6: Large file (1 MB random)
 dd if=/dev/urandom of="$INPUT" bs=1024 count=1024 2>/dev/null
-$RMRF -- backup "$INPUT" "$STORE" > /dev/null
+$RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" "$STORE" > /dev/null 2>&1
+$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
 OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
 if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
     pass_msg "Large file (1 MB random): backup + restore bit-identical"

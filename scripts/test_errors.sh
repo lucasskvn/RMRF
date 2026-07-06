@@ -23,7 +23,7 @@ TEST_DIR=$(mktemp -d)
 STORE="$TEST_DIR/store"
 
 # Test 1: Unknown command
-if ($RMRF -- foobar 2>&1 || true) | grep -qi "unknown"; then
+if ($RMRF -- foobar 2>&1 || true) | grep -qiE "unrecognized|unknown|error"; then
     pass_msg "Unknown command: prints error"
 else
     fail_msg "Unknown command: should print error"
@@ -37,14 +37,14 @@ else
 fi
 
 # Test 3: Non-existent source file
-if ($RMRF -- backup /tmp/does_not_exist_rmrf_test.bin "$STORE" 2>&1 || true) | grep -qi "error"; then
+if ($RMRF -- backup /tmp/does_not_exist_rmrf_test.bin -s "$STORE" 2>&1 || true) | grep -qi "error"; then
     pass_msg "Non-existent source: prints error"
 else
     fail_msg "Non-existent source: should print error"
 fi
 
 # Test 4: Non-existent manifest
-if ($RMRF -- restore /tmp/does_not_exist_manifest.bincode "$STORE" 2>&1 || true) | grep -qi "error"; then
+if ($RMRF -- restore /tmp/does_not_exist_manifest.bincode -s "$STORE" 2>&1 || true) | grep -qi "error"; then
     pass_msg "Non-existent manifest: prints error"
 else
     fail_msg "Non-existent manifest: should print error"
@@ -52,7 +52,7 @@ fi
 
 # Test 5: Corrupted manifest
 echo "not a valid bincode file" > "$TEST_DIR/corrupt.bincode"
-if ($RMRF -- restore "$TEST_DIR/corrupt.bincode" "$STORE" 2>&1 || true) | grep -qi "error"; then
+if ($RMRF -- restore "$TEST_DIR/corrupt.bincode" -s "$STORE" 2>&1 || true) | grep -qi "error"; then
     pass_msg "Corrupted manifest: prints error"
 else
     fail_msg "Corrupted manifest: should print error"
@@ -61,7 +61,7 @@ fi
 # Test 6: Non-writable store
 mkdir -p "$TEST_DIR/readonly"
 chmod 444 "$TEST_DIR/readonly"
-if ($RMRF -- backup "$TEST_DIR/corrupt.bincode" "$TEST_DIR/readonly" 2>&1 || true) | grep -qiE "error|permission"; then
+if ($RMRF -- backup "$TEST_DIR/corrupt.bincode" -s "$TEST_DIR/readonly" 2>&1 || true) | grep -qiE "error|permission"; then
     pass_msg "Non-writable store: prints error"
 else
     fail_msg "Non-writable store: should print error"
@@ -70,10 +70,10 @@ chmod 755 "$TEST_DIR/readonly"
 
 # Test 7: Missing chunk (backup then delete chunks, try restore)
 echo "test content" > "$TEST_DIR/test.txt"
-$RMRF -- backup "$TEST_DIR/test.txt" "$STORE" > /dev/null
+$RMRF -- backup "$TEST_DIR/test.txt" -s "$STORE" > /dev/null
 find "$STORE/chunks" -type f -delete 2>/dev/null || true
 MANIFEST=$(ls -t "$STORE/manifests/"*.bincode | head -1)
-if ($RMRF -- restore "$MANIFEST" "$STORE" 2>&1 || true) | grep -qiE "not found|error"; then
+if ($RMRF -- restore "$MANIFEST" -s "$STORE" 2>&1 || true) | grep -qiE "not found|error"; then
     pass_msg "Missing chunk: prints error"
 else
     fail_msg "Missing chunk: should print error"
