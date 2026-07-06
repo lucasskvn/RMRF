@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rmrf-core",
+    "crates/rmrf-store",
+    "crates/rmrf-source",
+    "crates/rmrf-manifest",
+    "crates/rmrf-cli",
+]
