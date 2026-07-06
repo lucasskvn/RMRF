@@ -9,6 +9,7 @@
 | `test_edge_cases.sh` | Cas limites | 8 | Fichiers vides, 1 octet, motifs binaires, Unicode |
 | `test_sizes.sh` | Stress tailles | 9 | De 1 KB à 5 MB, données aléatoires |
 | `test_errors.sh` | Gestion d'erreurs | 8 | Commandes invalides, fichiers manquants, corruption |
+| `test_vm_mock.sh` | VM Proxmox simulée | 5 | Mock `qm` + ProxmoxLifecycle sans vrai Proxmox |
 | `test_all.sh` | Runner global | — | Exécute tous les scripts ci-dessus + `cargo test` |
 
 ---
@@ -96,6 +97,27 @@ Chaque test : `dd /dev/urandom` → backup → restore → `diff`. Les fichiers 
 | 6 | Store non accessible en écriture (`chmod 444`) | Message d'erreur |
 | 7 | Chunk manquant (backup OK puis suppression des chunks) | Message d'erreur, pas de crash |
 | 8 | Aucun argument | Message d'usage/erreur |
+
+---
+    
+## `test_vm_mock.sh` — VM Proxmox simulé
+
+**Objectif** : Valider que `ProxmoxLifecycle` appelle `qm suspend`/`qm resume` correctement, sans nécessiter un vrai hôte Proxmox.
+
+| # | Test | Vérification |
+|---|------|-------------|
+| 1 | `qm suspend 100` appelé | `grep "suspend 100" /tmp/qm.log` |
+| 2 | `qm resume 100` appelé | `grep "resume 100" /tmp/qm.log` |
+| 3 | Ordre : suspend avant resume | `n° ligne suspend < n° ligne resume` |
+| 4 | Backup + restore bit-identical | `diff` |
+| 5 | SourceType VmDisk dans le manifest | `rmrf info` contient "VmDisk" |
+
+Crée un script mock `/tmp/.../qm` qui logge ses appels, l'injecte via `PATH`, lance `rmrf backup --vm 100 --hypervisor proxmox`, puis vérifie le log.
+
+**Utilisation** :
+```bash
+bash scripts/test_vm_mock.sh
+```
 
 ---
 

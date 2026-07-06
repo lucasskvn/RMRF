@@ -57,6 +57,7 @@ run_script "$SCRIPT_DIR/test_dedup.sh"
 run_script "$SCRIPT_DIR/test_edge_cases.sh"
 run_script "$SCRIPT_DIR/test_sizes.sh"
 run_script "$SCRIPT_DIR/test_errors.sh"
+run_script "$SCRIPT_DIR/test_vm_mock.sh"
 
 echo -e "${BLUE}╔══════════════════════════════╗${NC}"
 echo -e "${BLUE}║        Final Results          ║${NC}"
