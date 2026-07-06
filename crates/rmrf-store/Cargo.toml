@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 rmrf-core = { path = "../rmrf-core" }
-sha2 = "0.10"
+blake3 = "1"
 hex = "0.4"
 zstd = "0.13"
 bincode = "1"

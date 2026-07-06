@@ -7,7 +7,7 @@
 
 use rmrf_core::{Source, SourceId, SourceMetadata, SourceType};
 use std::fs::File;
-use std::io::{self, Read};
+use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
@@ -36,13 +36,15 @@ impl FileSource {
     }
 }
 
+impl io::Read for FileSource {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.file.read(buf)
+    }
+}
+
 impl Source for FileSource {
     fn metadata(&self) -> SourceMetadata {
         self.metadata.clone()
-    }
-
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.file.read(buf)
     }
 
     fn size_hint(&self) -> Option<u64> {
@@ -53,7 +55,7 @@ impl Source for FileSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{Read, Write};
 
     #[test]
     fn file_source_opens_existing_file() {

@@ -56,9 +56,8 @@ pub struct IndexEntry {
     pub compressed_size: u32,
 }
 
-pub trait Source {
+pub trait Source: io::Read {
     fn metadata(&self) -> SourceMetadata;
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
     fn size_hint(&self) -> Option<u64>;
 }
 

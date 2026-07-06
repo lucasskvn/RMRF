@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use fastcdc::v2016::StreamCDC;
 use rmrf_core::{ChunkStore, DedupIndex, Source};
 use rmrf_manifest::Manifest;
 use rmrf_source::FileSource;
@@ -7,7 +8,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const CHUNK_SIZE: usize = 8192;
 const DEFAULT_STORE: &str = "./rmrf-store";
 
 #[derive(Parser)]
@@ -65,7 +65,7 @@ fn main() {
 fn backup(source: &Path, store_dir: &Path) {
     println!("Backup: {}", source.display());
 
-    let mut file_source = match FileSource::new(source) {
+    let file_source = match FileSource::new(source) {
         Ok(fs) => fs,
         Err(e) => {
             eprintln!("Error opening file: {}", e);
@@ -94,45 +94,43 @@ fn backup(source: &Path, store_dir: &Path) {
         }
     };
 
-    let mut buffer = vec![0u8; CHUNK_SIZE];
+    let chunker = StreamCDC::new(file_source, 4096, 16384, 65536);
     let mut chunk_hashes: Vec<[u8; 32]> = Vec::new();
     let mut chunk_count = 0;
     let mut total_bytes = 0;
     let mut dedup_skipped = 0u64;
 
-    loop {
-        match file_source.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(n) => {
-                let data = &buffer[..n];
-                let hash = hash_data(data);
-
-                if let Ok(Some(_entry)) = dedup_index.lookup(&hash) {
-                    let _ = dedup_index.increment_refcount(&hash);
-                    dedup_skipped += 1;
-                } else {
-                    let uncompressed = data.len() as u32;
-                    let location = match chunk_store.put(&hash, data) {
-                        Ok(loc) => loc,
-                        Err(e) => {
-                            eprintln!("Error storing chunk: {}", e);
-                            return;
-                        }
-                    };
-                    let _ = dedup_index.insert(&hash, location, uncompressed, uncompressed);
-                }
-
-                chunk_hashes.push(hash);
-                chunk_count += 1;
-                total_bytes += n as u64;
-                print!(".");
-                std::io::Write::flush(&mut std::io::stdout()).ok();
-            }
+    for chunk_result in chunker {
+        let chunk = match chunk_result {
+            Ok(c) => c,
             Err(e) => {
-                eprintln!("Error reading file: {}", e);
+                eprintln!("Error reading chunk: {}", e);
                 return;
             }
+        };
+        let data = &chunk.data;
+        let hash = hash_data(data);
+
+        if let Ok(Some(_entry)) = dedup_index.lookup(&hash) {
+            let _ = dedup_index.increment_refcount(&hash);
+            dedup_skipped += 1;
+        } else {
+            let uncompressed = data.len() as u32;
+            let location = match chunk_store.put(&hash, data) {
+                Ok(loc) => loc,
+                Err(e) => {
+                    eprintln!("Error storing chunk: {}", e);
+                    return;
+                }
+            };
+            let _ = dedup_index.insert(&hash, location, uncompressed, uncompressed);
         }
+
+        chunk_hashes.push(hash);
+        chunk_count += 1;
+        total_bytes += data.len() as u64;
+        print!(".");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
     }
 
     let manifests_dir = store_dir.join("manifests");
@@ -143,7 +141,7 @@ fn backup(source: &Path, store_dir: &Path) {
     }
 
     let manifest = Manifest {
-        version: 1,
+        version: rmrf_manifest::MANIFEST_VERSION,
         source: metadata,
         chunks: chunk_hashes,
     };
