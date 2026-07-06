@@ -201,13 +201,19 @@ echo ""
 echo "--- Test 9: Error — non-existent VM ---"
 ERR_HV="--hypervisor proxmox"
 [ "$LXC" = true ] && ERR_HV="--hypervisor proxmox-lxc"
-$RMRF backup --vm 99999 $ERR_HV -s "$STORE" 2>&1 | grep -qiE "error|not found|failed" \
+set +e
+T9_OUT=$($RMRF backup --vm 99999 $ERR_HV -s "$STORE" 2>&1)
+set -e
+echo "$T9_OUT" | grep -qiE "error|not found|failed" \
     && pass_msg "Non-existent VM: error handled" || fail_msg "Non-existent VM: no error"
 
 # ── Test 10: Error — non-existent disk ─────────────────────────────
 echo ""
 echo "--- Test 10: Error — non-existent disk ---"
-$RMRF backup /dev/pve/nonexistent-disk -s "$STORE" --vm "$VMID" --no-suspend 2>&1 | grep -qiE "error|not found|no such" \
+set +e
+T10_OUT=$($RMRF backup /dev/pve/nonexistent-disk -s "$STORE" --vm "$VMID" --no-suspend 2>&1)
+set -e
+echo "$T10_OUT" | grep -qiE "error|not found|no such" \
     && pass_msg "Bad disk path: error handled" || fail_msg "Bad disk path: no error"
 
 # ── Test 11: Safety — refuse restore to original ───────────────────
@@ -215,7 +221,10 @@ echo ""
 echo "--- Test 11: Safety — restore to original refused ---"
 SRC_PATH=$(echo "$INFO_OUT" | grep -i "^Source path:" | sed 's/^[^:]*: *//')
 if [ -n "$SRC_PATH" ]; then
-    $RMRF restore "$MANIFEST" -s "$STORE" -o "$SRC_PATH" 2>&1 | grep -qiE "refuse|overwrite|exists|force" \
+    set +e
+    T11_OUT=$($RMRF restore "$MANIFEST" -s "$STORE" -o "$SRC_PATH" 2>&1)
+    set -e
+    echo "$T11_OUT" | grep -qiE "refuse|overwrite|exists|force" \
         && pass_msg "Restore to original: refused (safe)" || fail_msg "Restore to original: NOT refused"
 else
     warn_msg "Source path unknown, skipping"
@@ -224,7 +233,10 @@ fi
 # ── Test 12: Error — bad store ─────────────────────────────────────
 echo ""
 echo "--- Test 12: Error — bad store ---"
-$RMRF restore "$MANIFEST" -s /tmp/rmrf-nonexistent-store -o /tmp/rmrf-dummy 2>&1 | grep -qiE "error|not found|no such" \
+set +e
+T12_OUT=$($RMRF restore "$MANIFEST" -s /tmp/rmrf-nonexistent-store -o /tmp/rmrf-dummy 2>&1)
+set -e
+echo "$T12_OUT" | grep -qiE "error|not found|no such" \
     && pass_msg "Bad store: error handled" || fail_msg "Bad store: no error"
 
 # ── Test 13: Store structure ───────────────────────────────────────
