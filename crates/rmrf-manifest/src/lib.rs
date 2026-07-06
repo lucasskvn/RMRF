@@ -1,4 +1,4 @@
-use rmrf_core::{Hash, Result, SilexError, SourceMetadata};
+use rmrf_core::{Hash, Result, RmrfError, SourceMetadata};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -15,7 +15,7 @@ pub struct Manifest {
 impl Manifest {
     pub fn save(&self, path: &Path) -> Result<()> {
         let data = bincode::serialize(self)
-            .map_err(|e| SilexError::Msg(format!("manifest serialize: {e}")))?;
+            .map_err(|e| RmrfError::Msg(format!("manifest serialize: {e}")))?;
         fs::write(path, data)?;
         Ok(())
     }
@@ -23,9 +23,9 @@ impl Manifest {
     pub fn load(path: &Path) -> Result<Self> {
         let data = fs::read(path)?;
         let manifest: Self = bincode::deserialize(&data)
-            .map_err(|e| SilexError::Msg(format!("manifest deserialize: {e}")))?;
+            .map_err(|e| RmrfError::Msg(format!("manifest deserialize: {e}")))?;
         if manifest.version != MANIFEST_VERSION {
-            return Err(SilexError::Msg(format!(
+            return Err(RmrfError::Msg(format!(
                 "unsupported manifest version: {} (expected {MANIFEST_VERSION})",
                 manifest.version
             )));

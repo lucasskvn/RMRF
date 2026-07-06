@@ -1,5 +1,5 @@
 use rmrf_core::{
-    ChunkLocation, ChunkStore, DedupIndex, Hash, IndexEntry, Result as SilexResult, SilexError,
+    ChunkLocation, ChunkStore, DedupIndex, Hash, IndexEntry, Result as RmrfResult, RmrfError,
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -13,7 +13,7 @@ pub struct LocalChunkStore {
 }
 
 impl LocalChunkStore {
-    pub fn new(path: PathBuf) -> SilexResult<Self> {
+    pub fn new(path: PathBuf) -> RmrfResult<Self> {
         fs::create_dir_all(&path)?;
         Ok(LocalChunkStore { base_path: path })
     }
@@ -27,29 +27,29 @@ impl LocalChunkStore {
 }
 
 impl ChunkStore for LocalChunkStore {
-    fn put(&mut self, hash: &Hash, data: &[u8]) -> SilexResult<ChunkLocation> {
+    fn put(&mut self, hash: &Hash, data: &[u8]) -> RmrfResult<ChunkLocation> {
         let path = self.hash_to_path(hash);
         let parent = path
             .parent()
-            .ok_or_else(|| SilexError::Msg("invalid chunk path: no parent directory".into()))?;
+            .ok_or_else(|| RmrfError::Msg("invalid chunk path: no parent directory".into()))?;
         fs::create_dir_all(parent)?;
         fs::write(&path, data)?;
 
         let prefix = parent
             .file_name()
-            .ok_or_else(|| SilexError::Msg("invalid chunk path: no prefix directory".into()))?
+            .ok_or_else(|| RmrfError::Msg("invalid chunk path: no prefix directory".into()))?
             .to_string_lossy()
             .to_string();
         let filename = path
             .file_name()
-            .ok_or_else(|| SilexError::Msg("invalid chunk path: no filename".into()))?
+            .ok_or_else(|| RmrfError::Msg("invalid chunk path: no filename".into()))?
             .to_string_lossy()
             .to_string();
 
         Ok(ChunkLocation { prefix, filename })
     }
 
-    fn get(&self, hash: &Hash) -> SilexResult<Option<Vec<u8>>> {
+    fn get(&self, hash: &Hash) -> RmrfResult<Option<Vec<u8>>> {
         let path = self.hash_to_path(hash);
 
         match fs::read(&path) {
@@ -59,11 +59,11 @@ impl ChunkStore for LocalChunkStore {
         }
     }
 
-    fn exists(&self, hash: &Hash) -> SilexResult<bool> {
+    fn exists(&self, hash: &Hash) -> RmrfResult<bool> {
         Ok(self.hash_to_path(hash).exists())
     }
 
-    fn delete(&mut self, hash: &Hash) -> SilexResult<()> {
+    fn delete(&mut self, hash: &Hash) -> RmrfResult<()> {
         fs::remove_file(self.hash_to_path(hash))?;
         Ok(())
     }
@@ -92,7 +92,7 @@ impl Default for MemoryDedupIndex {
 }
 
 impl DedupIndex for MemoryDedupIndex {
-    fn lookup(&self, hash: &Hash) -> SilexResult<Option<IndexEntry>> {
+    fn lookup(&self, hash: &Hash) -> RmrfResult<Option<IndexEntry>> {
         Ok(self.entries.get(&Self::hash_key(hash)).cloned())
     }
 
@@ -102,7 +102,7 @@ impl DedupIndex for MemoryDedupIndex {
         location: ChunkLocation,
         uncompressed_size: u32,
         compressed_size: u32,
-    ) -> SilexResult<()> {
+    ) -> RmrfResult<()> {
         self.entries.insert(
             Self::hash_key(hash),
             IndexEntry {
@@ -115,14 +115,14 @@ impl DedupIndex for MemoryDedupIndex {
         Ok(())
     }
 
-    fn increment_refcount(&mut self, hash: &Hash) -> SilexResult<()> {
+    fn increment_refcount(&mut self, hash: &Hash) -> RmrfResult<()> {
         if let Some(entry) = self.entries.get_mut(&Self::hash_key(hash)) {
             entry.refcount += 1;
         }
         Ok(())
     }
 
-    fn decrement_refcount(&mut self, hash: &Hash) -> SilexResult<u64> {
+    fn decrement_refcount(&mut self, hash: &Hash) -> RmrfResult<u64> {
         if let Some(entry) = self.entries.get_mut(&Self::hash_key(hash)) {
             entry.refcount = entry.refcount.saturating_sub(1);
             Ok(entry.refcount)
@@ -138,23 +138,23 @@ pub struct PersistentDedupIndex {
 }
 
 impl PersistentDedupIndex {
-    pub fn new(save_path: PathBuf) -> SilexResult<Self> {
+    pub fn new(save_path: PathBuf) -> RmrfResult<Self> {
         let entries = if save_path.exists() {
             let data = fs::read(&save_path)?;
             bincode::deserialize(&data)
-                .map_err(|e| SilexError::Msg(format!("Failed to load dedup index: {e}")))?
+                .map_err(|e| RmrfError::Msg(format!("Failed to load dedup index: {e}")))?
         } else {
             HashMap::new()
         };
         Ok(Self { entries, save_path })
     }
 
-    pub fn save(&self) -> SilexResult<()> {
+    pub fn save(&self) -> RmrfResult<()> {
         if let Some(parent) = self.save_path.parent() {
             fs::create_dir_all(parent)?;
         }
         let data = bincode::serialize(&self.entries)
-            .map_err(|e| SilexError::Msg(format!("Failed to serialize dedup index: {e}")))?;
+            .map_err(|e| RmrfError::Msg(format!("Failed to serialize dedup index: {e}")))?;
         fs::write(&self.save_path, data)?;
         Ok(())
     }
@@ -165,7 +165,7 @@ impl PersistentDedupIndex {
 }
 
 impl DedupIndex for PersistentDedupIndex {
-    fn lookup(&self, hash: &Hash) -> SilexResult<Option<IndexEntry>> {
+    fn lookup(&self, hash: &Hash) -> RmrfResult<Option<IndexEntry>> {
         Ok(self.entries.get(&Self::hash_key(hash)).cloned())
     }
 
@@ -175,7 +175,7 @@ impl DedupIndex for PersistentDedupIndex {
         location: ChunkLocation,
         uncompressed_size: u32,
         compressed_size: u32,
-    ) -> SilexResult<()> {
+    ) -> RmrfResult<()> {
         self.entries.insert(
             Self::hash_key(hash),
             IndexEntry {
@@ -188,14 +188,14 @@ impl DedupIndex for PersistentDedupIndex {
         Ok(())
     }
 
-    fn increment_refcount(&mut self, hash: &Hash) -> SilexResult<()> {
+    fn increment_refcount(&mut self, hash: &Hash) -> RmrfResult<()> {
         if let Some(entry) = self.entries.get_mut(&Self::hash_key(hash)) {
             entry.refcount += 1;
         }
         Ok(())
     }
 
-    fn decrement_refcount(&mut self, hash: &Hash) -> SilexResult<u64> {
+    fn decrement_refcount(&mut self, hash: &Hash) -> RmrfResult<u64> {
         if let Some(entry) = self.entries.get_mut(&Self::hash_key(hash)) {
             entry.refcount = entry.refcount.saturating_sub(1);
             Ok(entry.refcount)
@@ -218,46 +218,46 @@ impl<S: ChunkStore> CompressedChunkStore<S> {
         }
     }
 
-    fn compress(&self, data: &[u8]) -> SilexResult<Vec<u8>> {
+    fn compress(&self, data: &[u8]) -> RmrfResult<Vec<u8>> {
         let mut encoder = Encoder::new(Vec::new(), self.compression_level)
-            .map_err(|e| SilexError::Msg(format!("Compression error: {e}")))?;
+            .map_err(|e| RmrfError::Msg(format!("Compression error: {e}")))?;
         encoder
             .write_all(data)
-            .map_err(|e| SilexError::Msg(format!("Write error: {e}")))?;
+            .map_err(|e| RmrfError::Msg(format!("Write error: {e}")))?;
         encoder
             .finish()
-            .map_err(|e| SilexError::Msg(format!("Finish error: {e}")))
+            .map_err(|e| RmrfError::Msg(format!("Finish error: {e}")))
     }
 
-    fn decompress(&self, data: &[u8]) -> SilexResult<Vec<u8>> {
+    fn decompress(&self, data: &[u8]) -> RmrfResult<Vec<u8>> {
         let mut decoder = zstd::Decoder::new(data)
-            .map_err(|e| SilexError::Msg(format!("Decompression error: {e}")))?;
+            .map_err(|e| RmrfError::Msg(format!("Decompression error: {e}")))?;
         let mut result = Vec::new();
         decoder
             .read_to_end(&mut result)
-            .map_err(|e| SilexError::Msg(format!("Read error: {e}")))?;
+            .map_err(|e| RmrfError::Msg(format!("Read error: {e}")))?;
         Ok(result)
     }
 }
 
 impl<S: ChunkStore> ChunkStore for CompressedChunkStore<S> {
-    fn put(&mut self, hash: &Hash, data: &[u8]) -> SilexResult<ChunkLocation> {
+    fn put(&mut self, hash: &Hash, data: &[u8]) -> RmrfResult<ChunkLocation> {
         let compressed = self.compress(data)?;
         self.inner.put(hash, &compressed)
     }
 
-    fn get(&self, hash: &Hash) -> SilexResult<Option<Vec<u8>>> {
+    fn get(&self, hash: &Hash) -> RmrfResult<Option<Vec<u8>>> {
         match self.inner.get(hash)? {
             Some(compressed_data) => Ok(Some(self.decompress(&compressed_data)?)),
             None => Ok(None),
         }
     }
 
-    fn exists(&self, hash: &Hash) -> SilexResult<bool> {
+    fn exists(&self, hash: &Hash) -> RmrfResult<bool> {
         self.inner.exists(hash)
     }
 
-    fn delete(&mut self, hash: &Hash) -> SilexResult<()> {
+    fn delete(&mut self, hash: &Hash) -> RmrfResult<()> {
         self.inner.delete(hash)
     }
 }

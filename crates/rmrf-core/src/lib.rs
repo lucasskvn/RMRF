@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::io;
 
-pub type Result<T> = std::result::Result<T, SilexError>;
+pub type Result<T> = std::result::Result<T, RmrfError>;
 
 #[derive(Debug, thiserror::Error)]
-pub enum SilexError {
+pub enum RmrfError {
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
     #[error("{0}")]
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn error_type_display() {
-        let err = SilexError::Msg("test error".into());
+        let err = RmrfError::Msg("test error".into());
         assert_eq!(format!("{}", err), "test error");
     }
 
