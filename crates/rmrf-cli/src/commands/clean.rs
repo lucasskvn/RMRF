@@ -19,9 +19,10 @@ const TEST_ARTIFACTS: &[&str] = &[
     "écoß测试.txt",
 ];
 
-pub fn clean() {
+pub fn clean() -> bool {
     let removed = TEST_ARTIFACTS.iter().filter_map(remove_artifact).count();
     print_clean_summary(removed);
+    true
 }
 
 fn remove_artifact(name: &&str) -> Option<()> {

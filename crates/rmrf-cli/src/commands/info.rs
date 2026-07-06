@@ -3,12 +3,12 @@ use std::path::Path;
 
 use super::helpers::format_size;
 
-pub fn info(manifest_path: &Path, _store_dir: &Path) {
+pub fn info(manifest_path: &Path, _store_dir: &Path) -> bool {
     let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("Error loading manifest: {e}");
-            return;
+            return false;
         }
     };
     println!("Version:     v{}", manifest.version);
@@ -22,4 +22,5 @@ pub fn info(manifest_path: &Path, _store_dir: &Path) {
     println!("Modified:    {}", manifest.source.modified);
     println!("Permissions: {:o}", manifest.source.permissions);
     println!("Chunks:      {}", manifest.chunks.len());
+    true
 }

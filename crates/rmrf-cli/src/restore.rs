@@ -6,38 +6,53 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, force: bool) {
+pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, force: bool) -> bool {
     println!("Restore: {}", manifest_path.display());
 
     let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
-        Err(e) => return eprintln!("Error loading manifest: {e}"),
+        Err(e) => {
+            eprintln!("Error loading manifest: {e}");
+            return false;
+        }
     };
 
     let output_path = resolve_output_path_or_default(output, manifest_path);
 
     if !check_overwrite(&output_path, force) {
-        return;
+        return false;
     }
 
     let chunk_store = match open_chunk_store(store_dir) {
         Ok(s) => s,
-        Err(e) => return eprintln!("Error opening chunk store: {e}"),
+        Err(e) => {
+            eprintln!("Error opening chunk store: {e}");
+            return false;
+        }
     };
 
     if is_empty_manifest(&manifest, &output_path) {
-        return;
+        return true;
     }
 
     match restore_file(&manifest, &chunk_store, &output_path) {
-        Ok(_) => println!("Restore complete: {}", output_path.display()),
-        Err(e) => eprintln!("Restore failed: {e}"),
+        Ok(_) => {
+            println!("Restore complete: {}", output_path.display());
+            true
+        }
+        Err(e) => {
+            eprintln!("Restore failed: {e}");
+            false
+        }
     }
 }
 
 fn is_empty_manifest(manifest: &Manifest, output_path: &Path) -> bool {
     if manifest.chunks.is_empty() {
-        fs::write(output_path, b"").ok();
+        if let Err(e) = fs::write(output_path, b"") {
+            eprintln!("Error writing empty file: {e}");
+            return false;
+        }
         println!("Restored empty file: {}", output_path.display());
         true
     } else {
@@ -52,12 +67,18 @@ fn resolve_output_path_or_default(output: Option<&Path>, manifest_path: &Path) -
 }
 
 fn check_overwrite(path: &Path, force: bool) -> bool {
-    if path.exists() && !force {
-        eprintln!("Error: output file already exists: {} (use --force to overwrite)", path.display());
-        false
-    } else {
-        true
+    if !path.exists() {
+        return true;
     }
+    if force {
+        return true;
+    }
+    if path.is_dir() || path.is_symlink() {
+        eprintln!("Error: output path is a directory or symlink: {} (use --force to overwrite)", path.display());
+        return false;
+    }
+    eprintln!("Error: output file already exists: {} (use --force to overwrite)", path.display());
+    false
 }
 
 fn open_chunk_store(store_dir: &Path) -> Result<CompressedChunkStore<LocalChunkStore>, String> {

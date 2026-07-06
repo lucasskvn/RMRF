@@ -3,24 +3,31 @@ use rmrf_manifest::Manifest;
 use rmrf_store::{CompressedChunkStore, LocalChunkStore};
 use std::path::Path;
 
-pub fn verify(manifest_path: &Path, store_dir: &Path) {
+pub fn verify(manifest_path: &Path, store_dir: &Path) -> bool {
     let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
-        Err(e) => return eprintln!("Error loading manifest: {e}"),
+        Err(e) => {
+            eprintln!("Error loading manifest: {e}");
+            return false;
+        }
     };
 
     let store = match open_compressed_store(store_dir) {
         Ok(s) => s,
-        Err(e) => return eprintln!("Error opening chunk store: {e}"),
+        Err(e) => {
+            eprintln!("Error opening chunk store: {e}");
+            return false;
+        }
     };
 
     let (total, missing) = check_all_chunks(&manifest, &store);
 
     if missing == 0 {
         println!("OK: all {total} chunks present and verified");
+        true
     } else {
         eprintln!("FAIL: {missing}/{total} chunks missing");
-        std::process::exit(1);
+        false
     }
 }
 

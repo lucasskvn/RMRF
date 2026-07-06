@@ -128,7 +128,7 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-    match cli.command {
+    let ok = match cli.command {
         Command::Backup {
             path,
             store,
@@ -150,6 +150,9 @@ fn main() {
         Command::Verify { manifest, store } => commands::verify(&manifest, &store),
         Command::Gc { store, dry_run } => commands::gc(&store, dry_run),
         Command::Clean => commands::clean(),
+    };
+    if !ok {
+        std::process::exit(1);
     }
 }
 
@@ -163,7 +166,7 @@ fn handle_backup(
     format: DiskFormatArg,
     no_suspend: bool,
     hypervisor: Hypervisor,
-) {
+) -> bool {
     let disk_format = parse_disk_format(&format, path);
     let lifecycle = if no_suspend {
         Box::new(NoopLifecycle) as Box<dyn VmLifecycle>
@@ -171,17 +174,23 @@ fn handle_backup(
         build_vm_lifecycle(vm.as_deref(), &hypervisor)
     };
 
-    if let Some(vm_id) = vm {
+    let ok = if let Some(vm_id) = vm {
         let disk = disk_name
             .as_deref()
             .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
-        backup::backup_vm(path, store, &vm_id, disk, disk_format, lifecycle);
+        backup::backup_vm(path, store, &vm_id, disk, disk_format, lifecycle)
     } else {
-        backup::backup(path, store);
+        backup::backup(path, store)
+    };
+
+    if !ok {
+        return false;
     }
 
     if let Some(days) = retain {
-        commands::run_retention_and_gc(store, days);
+        commands::run_retention_and_gc(store, days)
+    } else {
+        true
     }
 }
 

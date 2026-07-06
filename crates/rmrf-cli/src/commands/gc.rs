@@ -10,10 +10,15 @@ struct GcStats {
     freed_bytes: u64,
 }
 
-pub fn gc(store_dir: &Path, dry_run: bool) {
+pub fn gc(store_dir: &Path, dry_run: bool) -> bool {
+    if !store_dir.exists() {
+        eprintln!("Error: store directory not found: {}", store_dir.display());
+        return false;
+    }
     let referenced = collect_referenced_hashes(store_dir);
     let stats = scan_and_delete_orphans(store_dir, &referenced, dry_run);
     print_gc_report(&stats, dry_run);
+    true
 }
 
 fn collect_referenced_hashes(store_dir: &Path) -> HashSet<[u8; 32]> {
@@ -89,9 +94,7 @@ fn scan_prefix(
     if let Ok(inner_entries) = fs::read_dir(prefix.path()) {
         for inner in inner_entries.flatten() {
             let inner_name = inner.file_name().to_string_lossy().to_string();
-            if try_delete_orphan(&inner, &inner_name, &name, referenced, dry_run, &mut stats) {
-                continue;
-            }
+            try_delete_orphan(&inner, &inner_name, &name, referenced, dry_run, &mut stats);
         }
     }
 
@@ -105,31 +108,35 @@ fn try_delete_orphan(
     referenced: &HashSet<[u8; 32]>,
     dry_run: bool,
     stats: &mut GcStats,
-) -> bool {
+) {
     let hex_str = format!("{name}{inner_name}");
     let Some(hash_bytes) = hex_to_bytes(&hex_str) else {
-        return true;
+        eprintln!("Warning: non-hex file in chunks dir: {name}/{inner_name}");
+        return;
     };
     if hash_bytes.len() != 32 {
-        return true;
+        eprintln!("Warning: invalid hash length in chunks dir: {name}/{inner_name}");
+        return;
     }
     let mut hash = [0u8; 32];
     hash.copy_from_slice(&hash_bytes);
 
     if referenced.contains(&hash) {
-        return true;
+        return;
     }
 
     let size = inner.metadata().map(|m| m.len()).unwrap_or(0);
     if dry_run {
         println!("Would delete orphan: {name}/{inner_name} ({})", format_size(size));
     } else {
-        fs::remove_file(inner.path()).ok();
+        if let Err(e) = fs::remove_file(inner.path()) {
+            eprintln!("Error deleting {name}/{inner_name}: {e}");
+            return;
+        }
         println!("Deleted orphan: {name}/{inner_name} ({})", format_size(size));
     }
     stats.orphans += 1;
     stats.freed_bytes += size;
-    false
 }
 
 fn print_gc_report(stats: &GcStats, dry_run: bool) {

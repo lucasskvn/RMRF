@@ -8,9 +8,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-pub fn backup(source: &Path, store_dir: &Path) {
+pub fn backup(source: &Path, store_dir: &Path) -> bool {
     if source.is_dir() {
-        backup_dir(source, store_dir);
+        backup_dir(source, store_dir)
     } else {
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let basename = source
@@ -18,7 +18,7 @@ pub fn backup(source: &Path, store_dir: &Path) {
             .unwrap_or(source.as_os_str())
             .to_string_lossy()
             .to_string();
-        backup_file(source, store_dir, &timestamp, &basename);
+        backup_file(source, store_dir, &timestamp, &basename).is_some()
     }
 }
 
@@ -46,7 +46,7 @@ fn compute_rel_label(path: &Path, dir: &Path) -> String {
         .replace('/', "_")
 }
 
-fn backup_dir(dir: &Path, store_dir: &Path) {
+fn backup_dir(dir: &Path, store_dir: &Path) -> bool {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     println!("Backup directory: {}", dir.display());
 
@@ -54,7 +54,7 @@ fn backup_dir(dir: &Path, store_dir: &Path) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("Error reading directory: {e}");
-            return;
+            return false;
         }
     };
 
@@ -62,11 +62,14 @@ fn backup_dir(dir: &Path, store_dir: &Path) {
     let mut stats = DirStats::default();
     for path in &files {
         let rel = compute_rel_label(path, dir);
-        stats.add(backup_file(path, store_dir, &timestamp, &rel));
+        if let Some(s) = backup_file(path, store_dir, &timestamp, &rel) {
+            stats.add(s);
+        }
     }
 
     println!("Directory backup complete!");
     print_dir_summary(stats.files, stats.chunks, stats.bytes, stats.skipped);
+    true
 }
 
 fn print_dir_summary(files: u64, chunks: u64, bytes: u64, skipped: u64) {
@@ -95,19 +98,19 @@ fn walk_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, io::Error> {
     Ok(files)
 }
 
-fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str) -> BackupStats {
+fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str) -> Option<BackupStats> {
     println!("Backup: {}", source.display());
 
     let mut file_source = match FileSource::new(source) {
         Ok(fs) => fs,
         Err(e) => {
             eprintln!("Error opening file: {e}");
-            return BackupStats { chunks: 0, bytes: 0, dedup_skipped: 0 };
+            return None;
         }
     };
 
     let metadata = file_source.metadata();
-    run_chunk_pipeline(&mut file_source, metadata, store_dir, timestamp, label)
+    Some(run_chunk_pipeline(&mut file_source, metadata, store_dir, timestamp, label))
 }
 
 pub fn backup_vm(
@@ -117,12 +120,12 @@ pub fn backup_vm(
     disk_name: &str,
     format: DiskFormat,
     lifecycle: Box<dyn VmLifecycle>,
-) {
+) -> bool {
     let mut vm_source = match VmSource::open(path, vm_id, disk_name, format, lifecycle) {
         Ok(vs) => vs,
         Err(e) => {
             eprintln!("Error opening VM source: {e}");
-            return;
+            return false;
         }
     };
 
@@ -141,6 +144,7 @@ pub fn backup_vm(
         &timestamp,
         &basename,
     );
+    true
 }
 
 fn run_chunk_pipeline(
@@ -153,7 +157,10 @@ fn run_chunk_pipeline(
     println!("Source size: {} bytes", metadata.size);
 
     let chunks_dir = store_dir.join("chunks");
-    let _ = fs::create_dir_all(&chunks_dir);
+    if let Err(e) = fs::create_dir_all(&chunks_dir) {
+        eprintln!("Error creating chunks directory: {e}");
+        return BackupStats { chunks: 0, bytes: 0, dedup_skipped: 0 };
+    }
     let local_store = match LocalChunkStore::new(chunks_dir) {
         Ok(s) => s,
         Err(e) => {
@@ -214,7 +221,9 @@ fn finish_backup(
     label: &str,
     stats: BackupStats,
 ) -> BackupStats {
-    let _ = dedup_index.save();
+    if let Err(e) = dedup_index.save() {
+        eprintln!("Warning: failed to save dedup index: {e}");
+    }
     save_manifest(chunk_hashes, metadata, store_dir, timestamp, label, stats)
 }
 
@@ -280,14 +289,29 @@ fn process_chunk(
     chunk_store: &mut CompressedChunkStore<LocalChunkStore>,
     dedup_index: &mut PersistentDedupIndex,
 ) -> ProcessResult {
-    if dedup_index.lookup(hash).ok().flatten().is_some() {
-        let _ = dedup_index.increment_refcount(hash);
-        return ProcessResult::Skipped;
+    match dedup_index.lookup(hash) {
+        Ok(Some(_)) => {
+            if let Err(e) = dedup_index.increment_refcount(hash) {
+                return ProcessResult::Error(format!("Error incrementing refcount: {e}"));
+            }
+            return ProcessResult::Skipped;
+        }
+        Err(e) => {
+            return ProcessResult::Error(format!("Error looking up dedup index: {e}"));
+        }
+        Ok(None) => {}
     }
     let uncompressed = data.len() as u32;
     match chunk_store.put(hash, data) {
         Ok(location) => {
-            let _ = dedup_index.insert(hash, location, uncompressed, uncompressed);
+            let compressed_size = chunk_store.get_raw(hash)
+                .ok()
+                .flatten()
+                .map(|d| d.len() as u32)
+                .unwrap_or(uncompressed);
+            if let Err(e) = dedup_index.insert(hash, location, uncompressed, compressed_size) {
+                return ProcessResult::Error(format!("Error inserting into dedup index: {e}"));
+            }
             ProcessResult::Stored
         }
         Err(e) => ProcessResult::Error(e.to_string()),
@@ -314,7 +338,10 @@ fn save_manifest(
         chunks: chunk_hashes.to_vec(),
     };
     let manifests_dir = store_dir.join("manifests");
-    let _ = fs::create_dir_all(&manifests_dir);
+    if let Err(e) = fs::create_dir_all(&manifests_dir) {
+        eprintln!("Error creating manifests directory: {e}");
+        return stats;
+    }
     let manifest_path = manifests_dir.join(format!("{timestamp}-{label}.bincode"));
 
     match manifest.save(&manifest_path) {

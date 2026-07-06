@@ -4,25 +4,26 @@ use std::path::Path;
 
 use super::helpers::format_size;
 
-pub fn list(store_dir: &Path) {
+pub fn list(store_dir: &Path) -> bool {
     let manifests_dir = store_dir.join("manifests");
     let mut entries: Vec<_> = match fs::read_dir(&manifests_dir) {
         Ok(entries) => entries.filter_map(|e| e.ok()).collect(),
         Err(e) => {
             eprintln!("Error reading manifests directory: {e}");
-            return;
+            return false;
         }
     };
     entries.sort_by_key(|e| e.file_name());
 
     if entries.is_empty() {
         println!("No backups found.");
-        return;
+        return true;
     }
 
     for entry in &entries {
         print_manifest_entry(entry);
     }
+    true
 }
 
 fn print_manifest_entry(entry: &fs::DirEntry) {
