@@ -6,3 +6,7 @@ publish = false
 
 [dependencies]
 rmrf-core = { path = "../rmrf-core" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
