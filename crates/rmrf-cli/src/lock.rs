@@ -1,3 +1,5 @@
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 
 const STORE_LOCK: &str = ".rmrf.lock";
@@ -8,21 +10,54 @@ pub fn try_lock_store(store: &Path) -> bool {
         return false;
     }
     let lock_path = store.join(STORE_LOCK);
-    if let Ok(pid_str) = std::fs::read_to_string(&lock_path) {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            let alive = Path::new(&format!("/proc/{pid}")).exists();
-            if alive {
-                eprintln!("Error: store is locked by process {pid}");
+
+    if let Err(e) = try_create_lock(&lock_path) {
+        match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                if !lock_is_stale(&lock_path) {
+                    return false;
+                }
+                let _ = std::fs::remove_file(&lock_path);
+                if let Err(e) = try_create_lock(&lock_path) {
+                    eprintln!("Error: cannot acquire store lock: {e}");
+                    return false;
+                }
+            }
+            _ => {
+                eprintln!("Error: cannot create store lock: {e}");
                 return false;
             }
-            eprintln!("Warning: removing stale lock from PID {pid}");
         }
     }
-    if let Err(e) = std::fs::write(&lock_path, format!("{}", std::process::id())) {
-        eprintln!("Error: cannot write store lock: {e}");
-        return false;
-    }
     true
+}
+
+fn try_create_lock(lock_path: &Path) -> std::io::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)?;
+    file.write_all(format!("{}", std::process::id()).as_bytes())?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn lock_is_stale(lock_path: &Path) -> bool {
+    let Ok(pid_str) = std::fs::read_to_string(lock_path) else {
+        return true;
+    };
+    let Ok(pid) = pid_str.trim().parse::<u32>() else {
+        eprintln!("Warning: removing unreadable store lock");
+        return true;
+    };
+    let alive = Path::new(&format!("/proc/{pid}")).exists();
+    if alive {
+        eprintln!("Error: store is locked by process {pid}");
+        false
+    } else {
+        eprintln!("Warning: removing stale lock from PID {pid}");
+        true
+    }
 }
 
 pub fn unlock_store(store: &Path) {
@@ -51,5 +86,51 @@ pub fn check_stale_sentinels(store: &Path) {
                 eprintln!("  Check VM status: qm status {vm_id} | pct status {vm_id}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{try_lock_store, unlock_store};
+    use tempfile::TempDir;
+
+    #[test]
+    fn first_lock_succeeds_second_blocks() {
+        let store = TempDir::new().unwrap();
+        assert!(
+            try_lock_store(store.path()),
+            "first acquisition must succeed"
+        );
+        assert!(
+            !try_lock_store(store.path()),
+            "second concurrent acquisition must be blocked"
+        );
+        unlock_store(store.path());
+        assert!(
+            try_lock_store(store.path()),
+            "store must be lockable again after unlock"
+        );
+        unlock_store(store.path());
+    }
+
+    #[test]
+    fn stale_lock_with_dead_pid_is_reclaimed() {
+        let store = TempDir::new().unwrap();
+        let lock = store.path().join(".rmrf.lock");
+        std::fs::write(&lock, "4194303").unwrap();
+        assert!(
+            try_lock_store(store.path()),
+            "a stale lock (dead PID) must be reclaimed"
+        );
+        unlock_store(store.path());
+    }
+
+    #[test]
+    fn lock_file_contains_current_pid() {
+        let store = TempDir::new().unwrap();
+        assert!(try_lock_store(store.path()));
+        let contents = std::fs::read_to_string(store.path().join(".rmrf.lock")).unwrap();
+        assert_eq!(contents.trim().parse::<u32>().unwrap(), std::process::id());
+        unlock_store(store.path());
     }
 }

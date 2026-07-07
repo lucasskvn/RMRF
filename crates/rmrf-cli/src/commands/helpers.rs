@@ -21,18 +21,25 @@ pub fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-pub fn parse_timestamp(s: &str) -> i64 {
+pub fn parse_timestamp(s: &str) -> Option<i64> {
     if s.len() < 15 {
-        return 0;
+        return None;
     }
-    let year: i32 = s[..4].parse().unwrap_or(1970);
-    let month: u32 = s[4..6].parse().unwrap_or(1);
-    let day: u32 = s[6..8].parse().unwrap_or(1);
-    let hour: u32 = s[9..11].parse().unwrap_or(0);
-    let min: u32 = s[11..13].parse().unwrap_or(0);
-    let sec: u32 = s[13..15].parse().unwrap_or(0);
+    let bytes = s.as_bytes();
+    if bytes[8] != b'T' {
+        return None;
+    }
+    let year: i32 = s[..4].parse().ok()?;
+    let month: u32 = s[4..6].parse().ok()?;
+    let day: u32 = s[6..8].parse().ok()?;
+    let hour: u32 = s[9..11].parse().ok()?;
+    let min: u32 = s[11..13].parse().ok()?;
+    let sec: u32 = s[13..15].parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || min > 59 || sec > 60 {
+        return None;
+    }
     let days = days_from_civil(year, month, day) - days_from_civil(1970, 1, 1);
-    days as i64 * 86400 + hour as i64 * 3600 + min as i64 * 60 + sec as i64
+    Some(days as i64 * 86400 + hour as i64 * 3600 + min as i64 * 60 + sec as i64)
 }
 
 fn days_from_civil(y: i32, m: u32, d: u32) -> i32 {
@@ -42,4 +49,25 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> i32 {
     let doy = (153 * (m + if m > 2 { 3 } else { 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146097 + doe as i32 - 719468
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_timestamp;
+
+    #[test]
+    fn parses_real_manifest_timestamp() {
+        let ts = parse_timestamp("20260707T120000Z").unwrap();
+        assert!(ts > 1_700_000_000);
+    }
+
+    #[test]
+    fn rejects_malformed_timestamps() {
+        assert!(parse_timestamp("garbage").is_none());
+        assert!(parse_timestamp("20260707").is_none(), "too short");
+        assert!(parse_timestamp("20261307T120000Z").is_none(), "month 13");
+        assert!(parse_timestamp("20260732T120000Z").is_none(), "day 32");
+        assert!(parse_timestamp("20260707T250000Z").is_none(), "hour 25");
+        assert!(parse_timestamp("20260707 120000Z").is_none());
+    }
 }

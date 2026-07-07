@@ -12,7 +12,11 @@ impl<S: ChunkStore> EncryptedChunkStore<S> {
         recipient: age::x25519::Recipient,
         identity: age::x25519::Identity,
     ) -> Self {
-        EncryptedChunkStore { inner, recipient, identity }
+        EncryptedChunkStore {
+            inner,
+            recipient,
+            identity,
+        }
     }
 }
 
@@ -35,7 +39,7 @@ impl<S: ChunkStore> ChunkStore for EncryptedChunkStore<S> {
     }
 
     fn get_raw(&self, hash: &Hash) -> RmrfResult<Option<Vec<u8>>> {
-        self.inner.get(hash)
+        self.inner.get_raw(hash)
     }
 
     fn exists(&self, hash: &Hash) -> RmrfResult<bool> {

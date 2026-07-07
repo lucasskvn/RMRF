@@ -12,7 +12,7 @@ mod restore;
 use clap::{Parser, Subcommand};
 use config::RmrfConfig;
 use disk_detect::{parse_disk_format, DiskFormatArg};
-use hypervisor::Hypervisor;
+use hypervisor::{validate_vm_id, Hypervisor};
 use lock::{check_stale_sentinels, store_sentinel_path, try_lock_store, unlock_store};
 use std::path::PathBuf;
 
@@ -93,6 +93,8 @@ enum Command {
         store: Option<PathBuf>,
         #[arg(long)]
         rehash: bool,
+        #[arg(long)]
+        identity: Option<String>,
     },
     Gc {
         #[arg(short, long)]
@@ -111,10 +113,17 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-    let cfg = cli.config.as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok()
-            .and_then(|s| toml::from_str(&s).ok()))
-        .unwrap_or_else(config::load_config);
+    let cfg = if let Some(p) = cli.config.as_ref() {
+        match config::load_config_file(p) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        config::load_config()
+    };
 
     let store = match &cli.command {
         Command::Backup { store, .. } => store.as_deref().unwrap_or(&cfg.store),
@@ -170,14 +179,39 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             force,
             jobs,
             identity,
-        } => restore::restore(&manifest, store.as_deref().unwrap_or(&cfg.store), output.as_deref(), force, jobs, identity.as_deref()),
-        Command::List { store, since, before, source } => {
-            commands::list(store.as_deref().unwrap_or(&cfg.store), since.as_deref(), before.as_deref(), source.as_deref())
+        } => restore::restore(
+            &manifest,
+            store.as_deref().unwrap_or(&cfg.store),
+            output.as_deref(),
+            force,
+            jobs,
+            identity.as_deref(),
+        ),
+        Command::List {
+            store,
+            since,
+            before,
+            source,
+        } => commands::list(
+            store.as_deref().unwrap_or(&cfg.store),
+            since.as_deref(),
+            before.as_deref(),
+            source.as_deref(),
+        ),
+        Command::Info { manifest, store } => {
+            commands::info(&manifest, store.as_deref().unwrap_or(&cfg.store))
         }
-        Command::Info { manifest, store } => commands::info(&manifest, store.as_deref().unwrap_or(&cfg.store)),
-        Command::Verify { manifest, store, rehash } => {
-            commands::verify(&manifest, store.as_deref().unwrap_or(&cfg.store), rehash)
-        }
+        Command::Verify {
+            manifest,
+            store,
+            rehash,
+            identity,
+        } => commands::verify(
+            &manifest,
+            store.as_deref().unwrap_or(&cfg.store),
+            rehash,
+            identity.as_deref(),
+        ),
         Command::Gc { store, dry_run } => {
             let store = store.as_deref().unwrap_or(&cfg.store);
             if !try_lock_store(store) {
@@ -198,9 +232,7 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             }
             true
         }
-        Command::Daemon { once, job } => {
-            daemon::run_daemon(once, job.as_deref(), cfg)
-        }
+        Command::Daemon { once, job } => daemon::run_daemon(once, job.as_deref(), cfg),
     }
 }
 
@@ -218,8 +250,24 @@ fn handle_backup(
     cfg: &RmrfConfig,
     encrypt: Option<&str>,
     live: bool,
-    qmp_socket: Option<&std::path::Path>,
+    _qmp_socket: Option<&std::path::Path>,
 ) -> bool {
+    if live {
+        eprintln!(
+            "Error: --live (QMP live backup) is disabled. \
+             blockdev-snapshot-sync creates an overlay disk with no merge-back \
+             path, which can corrupt the VM disk. Use suspend-based backup \
+             (drop --live) instead."
+        );
+        return false;
+    }
+    if let Some(vm_id) = vm.as_deref() {
+        if let Err(e) = validate_vm_id(vm_id) {
+            eprintln!("Error: {e}");
+            return false;
+        }
+    }
+
     let resolved_path;
     let path = match (path, &vm) {
         (Some(p), _) => p,
@@ -243,12 +291,7 @@ fn handle_backup(
     };
 
     let disk_format = parse_disk_format(&format, path);
-    let lifecycle: Box<dyn rmrf_source::VmLifecycle> = if live {
-        let socket = qmp_socket.map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("/var/run/qemu-server"));
-        let device = disk_name.as_deref().unwrap_or("scsi0");
-        Box::new(rmrf_source::QmpLifecycle::new(&socket, device))
-    } else if no_suspend {
+    let lifecycle: Box<dyn rmrf_source::VmLifecycle> = if no_suspend {
         Box::new(rmrf_source::NoopLifecycle)
     } else {
         hypervisor::build_vm_lifecycle(vm.as_deref(), &hypervisor)
@@ -263,7 +306,16 @@ fn handle_backup(
             .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
         let sentinel = store_sentinel_path(store, vm_id);
         std::fs::write(&sentinel, chrono::Utc::now().to_rfc3339()).ok();
-        let result = backup::backup_vm(path, store, vm_id, disk_label, disk_format, lifecycle, cfg, encrypt);
+        let result = backup::backup_vm(
+            path,
+            store,
+            vm_id,
+            disk_label,
+            disk_format,
+            lifecycle,
+            cfg,
+            encrypt,
+        );
         std::fs::remove_file(&sentinel).ok();
         result
     } else {
