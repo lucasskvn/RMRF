@@ -3,7 +3,6 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -200,7 +199,7 @@ pub fn run_daemon(once: bool, job_name: Option<&str>, cfg: &RmrfConfig) -> bool 
         let mut next_run: Option<(chrono::DateTime<chrono::Utc>, &Job)> = None;
 
         for job in &jobs {
-            if let Ok(schedule) = cron::Schedule::from_str(&job.schedule) {
+            if let Ok(schedule) = crate::config::parse_cron_schedule(&job.schedule) {
                 if let Some(next) = schedule.upcoming(chrono::Utc).next() {
                     match next_run {
                         Some((t, _)) if next < t => next_run = Some((next, job)),
@@ -221,7 +220,7 @@ pub fn run_daemon(once: bool, job_name: Option<&str>, cfg: &RmrfConfig) -> bool 
             std::thread::sleep(Duration::from_secs(sleep_secs.min(3600)));
 
             for job in &jobs {
-                if let Ok(schedule) = cron::Schedule::from_str(&job.schedule) {
+                if let Ok(schedule) = crate::config::parse_cron_schedule(&job.schedule) {
                     if let Some(next) = schedule.upcoming(chrono::Utc).next() {
                         if (next - chrono::Utc::now()).num_seconds().abs() < 5 {
                             run_job(job, cfg);

@@ -53,7 +53,17 @@ fn remove_old_manifests(
         }
         let basename = path.file_name().unwrap_or_default().to_string_lossy();
         let ts_str = basename.split('-').next().unwrap_or("");
-        if parse_timestamp(ts_str) > cutoff {
+        // A manifest whose name does not encode a valid timestamp was not
+        // written by this tool's normal pipeline. Skip it rather than
+        // treating it as "epoch 0" (ancient) and deleting it.
+        let Some(ts) = parse_timestamp(ts_str) else {
+            eprintln!(
+                "Warning: skipping manifest with unparseable timestamp in name: {}",
+                path.display()
+            );
+            continue;
+        };
+        if ts > cutoff {
             continue;
         }
         if decref_manifest(&path, dedup_index) {
@@ -69,10 +79,7 @@ fn remove_old_manifests(
     deleted
 }
 
-fn decref_manifest(
-    path: &Path,
-    dedup_index: &mut PersistentDedupIndex,
-) -> bool {
+fn decref_manifest(path: &Path, dedup_index: &mut PersistentDedupIndex) -> bool {
     let Ok(m) = Manifest::load(path) else {
         return false;
     };

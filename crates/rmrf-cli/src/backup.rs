@@ -23,7 +23,9 @@ fn open_chunk_store(
         let recipient = age::x25519::Recipient::from_str(pubkey_str)
             .map_err(|e| format!("Invalid age recipient: {e}"))?;
         let identity = age::x25519::Identity::generate();
-        Ok(Box::new(EncryptedChunkStore::new(compressed, recipient, identity)))
+        Ok(Box::new(EncryptedChunkStore::new(
+            compressed, recipient, identity,
+        )))
     } else {
         Ok(Box::new(compressed))
     }
@@ -126,10 +128,8 @@ fn walk_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, io::Error> {
             continue;
         }
         let path = entry.path();
-        let name = path.file_name();
-        if name.is_none_or(|n| n.to_string_lossy().starts_with('.')) {
-            continue;
-        }
+        // Do not skip dotfiles: a directory backup must include .config/,
+        // .ssh/, .bashrc and similar, otherwise user data is silently lost.
         if ft.is_dir() {
             files.extend(walk_files(&path)?);
         } else if ft.is_file() {
@@ -170,7 +170,13 @@ fn backup_file(
     let file_size = metadata.size;
     let encryption_key = encrypt.map(|s| s.to_string());
     let stats = run_chunk_pipeline(
-        &mut file_source, metadata, store_dir, timestamp, label, cfg, &mut *chunk_store,
+        &mut file_source,
+        metadata,
+        store_dir,
+        timestamp,
+        label,
+        cfg,
+        &mut *chunk_store,
         encryption_key,
     );
     if stats.chunks == 0 && file_size > 0 {

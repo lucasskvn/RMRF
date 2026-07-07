@@ -113,15 +113,17 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-    let cfg = cli
-        .config
-        .as_ref()
-        .and_then(|p| {
-            std::fs::read_to_string(p)
-                .ok()
-                .and_then(|s| toml::from_str(&s).ok())
-        })
-        .unwrap_or_else(config::load_config);
+    let cfg = if let Some(p) = cli.config.as_ref() {
+        match config::load_config_file(p) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        config::load_config()
+    };
 
     let store = match &cli.command {
         Command::Backup { store, .. } => store.as_deref().unwrap_or(&cfg.store),
