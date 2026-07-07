@@ -1,4 +1,5 @@
 use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 use rmrf_core::ChunkStore;
 use rmrf_manifest::Manifest;
 use rmrf_store::{CompressedChunkStore, LocalChunkStore};
@@ -8,10 +9,13 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+const RESTORE_BATCH: usize = 64;
+
 struct RestoreCtx {
     manifest: Manifest,
     output_path: std::path::PathBuf,
     chunk_store: CompressedChunkStore<LocalChunkStore>,
+    jobs: usize,
 }
 
 fn prepare_restore(
@@ -19,6 +23,7 @@ fn prepare_restore(
     store_dir: &Path,
     output: Option<&Path>,
     force: bool,
+    jobs: usize,
 ) -> Option<RestoreCtx> {
     let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
@@ -38,7 +43,7 @@ fn prepare_restore(
             return None;
         }
     };
-    Some(RestoreCtx { manifest, output_path, chunk_store })
+    Some(RestoreCtx { manifest, output_path, chunk_store, jobs })
 }
 
 pub fn restore(
@@ -46,10 +51,11 @@ pub fn restore(
     store_dir: &Path,
     output: Option<&Path>,
     force: bool,
+    jobs: usize,
 ) -> bool {
     println!("Restore: {}", manifest_path.display());
 
-    let ctx = match prepare_restore(manifest_path, store_dir, output, force) {
+    let ctx = match prepare_restore(manifest_path, store_dir, output, force, jobs) {
         Some(c) => c,
         None => return false,
     };
@@ -58,7 +64,7 @@ pub fn restore(
         return true;
     }
 
-    match restore_file(&ctx.manifest, &ctx.chunk_store, &ctx.output_path) {
+    match restore_file(&ctx.manifest, &ctx.chunk_store, &ctx.output_path, ctx.jobs) {
         Ok(_) => {
             println!("Restore complete: {}", ctx.output_path.display());
             true
@@ -139,22 +145,33 @@ pub fn restore_file(
     manifest: &Manifest,
     store: &dyn ChunkStore,
     dest: &Path,
+    jobs: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(jobs)
+        .build()?;
     let mut output = fs::File::create(dest)?;
     let total = manifest.chunks.len();
 
     let pb = create_progress_bar(total as u64);
 
-    for hash in manifest.chunks.iter() {
-        match store.get(hash)? {
-            Some(data) => {
-                output.write_all(&data)?;
-                pb.inc(1);
-            }
-            None => {
-                pb.finish_and_clear();
-                eprintln!("Error: chunk {:?} not found in store", &hash[..4]);
-                return Err("chunk not found".into());
+    for batch in manifest.chunks.chunks(RESTORE_BATCH) {
+        let results: Vec<Option<Vec<u8>>> = pool.install(|| {
+            batch.par_iter()
+                .map(|hash| store.get(hash).unwrap_or(None))
+                .collect()
+        });
+        for (hash, data) in batch.iter().zip(results) {
+            match data {
+                Some(d) => {
+                    output.write_all(&d)?;
+                    pb.inc(1);
+                }
+                None => {
+                    pb.finish_and_clear();
+                    eprintln!("Error: chunk {:?} not found in store", &hash[..4]);
+                    return Err("chunk not found".into());
+                }
             }
         }
     }
@@ -184,3 +201,4 @@ fn create_progress_bar(total: u64) -> ProgressBar {
     );
     pb
 }
+

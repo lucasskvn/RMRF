@@ -59,6 +59,8 @@ enum Command {
         output: Option<PathBuf>,
         #[arg(long)]
         force: bool,
+        #[arg(long, default_value = "4")]
+        jobs: usize,
     },
     List {
         #[arg(short, long)]
@@ -136,7 +138,8 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             store,
             output,
             force,
-        } => restore::restore(&manifest, store.as_deref().unwrap_or(&cfg.store), output.as_deref(), force),
+            jobs,
+        } => restore::restore(&manifest, store.as_deref().unwrap_or(&cfg.store), output.as_deref(), force, jobs),
         Command::List { store } => commands::list(store.as_deref().unwrap_or(&cfg.store)),
         Command::Info { manifest, store } => commands::info(&manifest, store.as_deref().unwrap_or(&cfg.store)),
         Command::Verify { manifest, store, rehash } => {

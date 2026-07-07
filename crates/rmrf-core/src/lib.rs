@@ -61,7 +61,7 @@ pub trait Source: io::Read {
     fn size_hint(&self) -> Option<u64>;
 }
 
-pub trait ChunkStore {
+pub trait ChunkStore: Send + Sync {
     fn put(&mut self, hash: &Hash, data: &[u8]) -> Result<ChunkLocation>;
     fn get(&self, hash: &Hash) -> Result<Option<Vec<u8>>>;
     fn exists(&self, hash: &Hash) -> Result<bool>;
