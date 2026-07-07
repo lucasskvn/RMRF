@@ -1,7 +1,5 @@
-use crate::qmp::QmpClient;
 use crate::FileSource;
 use rmrf_core::{DiskFormat, Source, SourceMetadata, SourceType};
-use std::cell::RefCell;
 use std::io;
 use std::path::Path;
 use std::process::Command;
@@ -70,10 +68,15 @@ impl VmLifecycle for LibvirtLifecycle {
     }
 }
 
+/// Live QMP-based backup is disabled: `blockdev-snapshot-sync` creates an
+/// overlay disk with no merge-back path, leaving the VM running off a /tmp
+/// overlay that depends on the original as a backing file — losing or moving
+/// either file corrupts the VM. The type is kept for API stability but every
+/// operation returns an error so it can never be reached in practice.
+#[allow(dead_code)]
 pub struct QmpLifecycle {
     socket_path: std::path::PathBuf,
     device: String,
-    snapshot_path: RefCell<Option<std::path::PathBuf>>,
 }
 
 impl QmpLifecycle {
@@ -81,24 +84,20 @@ impl QmpLifecycle {
         QmpLifecycle {
             socket_path: socket_path.to_path_buf(),
             device: device.to_string(),
-            snapshot_path: RefCell::new(None),
         }
     }
 }
 
 impl VmLifecycle for QmpLifecycle {
     fn suspend(&self, _vm_id: &str) -> rmrf_core::Result<()> {
-        let mut client = QmpClient::connect(&self.socket_path)?;
-        let snap = std::path::PathBuf::from(format!("/tmp/rmrf-qmp-{}.snap", self.device));
-        client.create_snapshot(&self.device, &snap, "qcow2")?;
-        *self.snapshot_path.borrow_mut() = Some(snap);
-        Ok(())
+        Err(rmrf_core::RmrfError::Msg(
+            "live QMP backup is disabled: use suspend-based backup (drop --live) instead".into(),
+        ))
     }
     fn resume(&self, _vm_id: &str) -> rmrf_core::Result<()> {
-        Ok(())
-    }
-    fn snapshot_path(&self) -> Option<std::path::PathBuf> {
-        self.snapshot_path.borrow().clone()
+        Err(rmrf_core::RmrfError::Msg(
+            "QMP live backup resume is not implemented".into(),
+        ))
     }
 }
 
@@ -109,7 +108,9 @@ fn run_external(cmd: &str, action: &str, vm_id: &str) -> rmrf_core::Result<()> {
         .map_err(|e| rmrf_core::RmrfError::Msg(format!("{cmd} {action}: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(rmrf_core::RmrfError::Msg(format!("{cmd} {action}: {stderr}")));
+        return Err(rmrf_core::RmrfError::Msg(format!(
+            "{cmd} {action}: {stderr}"
+        )));
     }
     Ok(())
 }
@@ -137,7 +138,9 @@ impl<L: VmLifecycle> VmSource<L> {
         };
 
         if !source_path.exists() {
-            let _ = lifecycle.resume(vm_id);
+            if let Err(e) = lifecycle.resume(vm_id) {
+                eprintln!("Warning: failed to resume VM {vm_id}: {e}");
+            }
             return Err(rmrf_core::RmrfError::Msg(format!(
                 "VM disk not found: {}",
                 source_path.display()
@@ -145,7 +148,9 @@ impl<L: VmLifecycle> VmSource<L> {
         }
 
         let source = FileSource::new(&source_path).map_err(|e| {
-            let _ = lifecycle.resume(vm_id);
+            if let Err(re) = lifecycle.resume(vm_id) {
+                eprintln!("Warning: failed to resume VM {vm_id}: {re}");
+            }
             rmrf_core::RmrfError::Io(e)
         })?;
 
@@ -184,7 +189,9 @@ impl<L: VmLifecycle> Source for VmSource<L> {
 impl<L: VmLifecycle> Drop for VmSource<L> {
     fn drop(&mut self) {
         if self.suspended {
-            let _ = self.lifecycle.resume(&self.vm_id);
+            if let Err(e) = self.lifecycle.resume(&self.vm_id) {
+                eprintln!("Warning: failed to resume VM {}: {e}", self.vm_id);
+            }
             self.suspended = false;
         }
     }

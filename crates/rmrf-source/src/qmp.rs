@@ -2,6 +2,9 @@ use rmrf_core::{Result, RmrfError};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::time::Duration;
+
+const QMP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct QmpClient {
     stream: BufReader<UnixStream>,
@@ -9,12 +12,16 @@ pub struct QmpClient {
 
 impl QmpClient {
     pub fn connect(socket_path: &Path) -> Result<Self> {
-        let stream = UnixStream::connect(socket_path)
-            .map_err(|e| RmrfError::Msg(format!("QMP connect to {}: {e}",
-                socket_path.display())))?;
+        let stream = UnixStream::connect(socket_path).map_err(|e| {
+            RmrfError::Msg(format!("QMP connect to {}: {e}", socket_path.display()))
+        })?;
+        stream
+            .set_read_timeout(Some(QMP_READ_TIMEOUT))
+            .map_err(|e| RmrfError::Msg(format!("QMP set read timeout: {e}")))?;
         let mut reader = BufReader::new(stream);
         let mut greeting = String::new();
-        reader.read_line(&mut greeting)
+        reader
+            .read_line(&mut greeting)
             .map_err(|e| RmrfError::Msg(format!("QMP read greeting: {e}")))?;
         let val: serde_json::Value = serde_json::from_str(&greeting)
             .map_err(|e| RmrfError::Msg(format!("QMP parse greeting: {e}")))?;
@@ -37,19 +44,35 @@ impl QmpClient {
         let mut req_bytes = serde_json::to_vec(&request)
             .map_err(|e| RmrfError::Msg(format!("QMP serialize: {e}")))?;
         req_bytes.push(b'\n');
-        self.stream.get_mut().write_all(&req_bytes)
+        self.stream
+            .get_mut()
+            .write_all(&req_bytes)
             .map_err(|e| RmrfError::Msg(format!("QMP write: {e}")))?;
-        self.stream.get_mut().flush()
+        self.stream
+            .get_mut()
+            .flush()
             .map_err(|e| RmrfError::Msg(format!("QMP flush: {e}")))?;
-        let mut line = String::new();
-        self.stream.read_line(&mut line)
-            .map_err(|e| RmrfError::Msg(format!("QMP read response: {e}")))?;
-        let val: serde_json::Value = serde_json::from_str(&line)
-            .map_err(|e| RmrfError::Msg(format!("QMP parse response: {e}")))?;
-        if val.get("error").is_some() {
-            return Err(RmrfError::Msg(format!("QMP error: {val}")));
+        // QMP interleaves asynchronous event lines with responses. Skip any
+        // line that is an event until we see a response carrying "return" or
+        // "error", so we never mistake an event for our command's result.
+        loop {
+            let mut line = String::new();
+            self.stream
+                .read_line(&mut line)
+                .map_err(|e| RmrfError::Msg(format!("QMP read response: {e}")))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let val: serde_json::Value = serde_json::from_str(&line)
+                .map_err(|e| RmrfError::Msg(format!("QMP parse response: {e}")))?;
+            if val.get("event").is_some() {
+                continue;
+            }
+            if val.get("error").is_some() {
+                return Err(RmrfError::Msg(format!("QMP error: {val}")));
+            }
+            return Ok(val);
         }
-        Ok(val)
     }
 
     pub fn create_snapshot(

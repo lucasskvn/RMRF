@@ -42,10 +42,13 @@ fn wait_for_socket(path: &Path) {
 fn qmp_handshake_success() {
     let dir = tempfile::TempDir::new().unwrap();
     let socket = dir.path().join("qmp.sock");
-    let rx = mock_qmp_server(&socket, vec![
-        "{\"QMP\":{\"version\":{\"qemu\":{\"major\":8,\"minor\":2,\"micro\":0}}}}\n",
-        "{\"return\":{}}\n",
-    ]);
+    let rx = mock_qmp_server(
+        &socket,
+        vec![
+            "{\"QMP\":{\"version\":{\"qemu\":{\"major\":8,\"minor\":2,\"micro\":0}}}}\n",
+            "{\"return\":{}}\n",
+        ],
+    );
     wait_for_socket(&socket);
     let client = QmpClient::connect(&socket).unwrap();
     let received = rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -57,9 +60,7 @@ fn qmp_handshake_success() {
 fn qmp_handshake_rejects_bad_greeting() {
     let dir = tempfile::TempDir::new().unwrap();
     let socket = dir.path().join("bad.sock");
-    let _rx = mock_qmp_server(&socket, vec![
-        "{\"error\":{\"desc\":\"bad\"}}\n",
-    ]);
+    let _rx = mock_qmp_server(&socket, vec!["{\"error\":{\"desc\":\"bad\"}}\n"]);
     wait_for_socket(&socket);
     let result = QmpClient::connect(&socket);
     assert!(result.is_err());
@@ -69,19 +70,50 @@ fn qmp_handshake_rejects_bad_greeting() {
 fn qmp_create_snapshot() {
     let dir = tempfile::TempDir::new().unwrap();
     let socket = dir.path().join("snap.sock");
-    let rx = mock_qmp_server(&socket, vec![
-        "{\"QMP\":{\"version\":{\"qemu\":{\"major\":8,\"minor\":2,\"micro\":0}}}}\n",
-        "{\"return\":{}}\n",
-        "{\"return\":{}}\n",
-    ]);
+    let rx = mock_qmp_server(
+        &socket,
+        vec![
+            "{\"QMP\":{\"version\":{\"qemu\":{\"major\":8,\"minor\":2,\"micro\":0}}}}\n",
+            "{\"return\":{}}\n",
+            "{\"return\":{}}\n",
+        ],
+    );
     wait_for_socket(&socket);
     let mut client = QmpClient::connect(&socket).unwrap();
     let _ = rx.recv_timeout(Duration::from_secs(2));
     let snap = dir.path().join("snap.qcow2");
-    client.create_snapshot("drive-virtio-disk0", &snap, "qcow2").unwrap();
+    client
+        .create_snapshot("drive-virtio-disk0", &snap, "qcow2")
+        .unwrap();
     let received = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(received.contains("blockdev-snapshot-sync"));
     assert!(received.contains("drive-virtio-disk0"));
     assert!(received.contains("snap.qcow2"));
+    client.close();
+}
+
+#[test]
+fn qmp_skips_async_event_lines_before_response() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let socket = dir.path().join("event.sock");
+    // For blockdev-snapshot-sync the server emits an asynchronous event line
+    // followed by the actual return value in a single write.
+    let event_then_return = "{\"event\":{\"event\":\"BLOCK_JOB_COMPLETED\"}}\n{\"return\":{}}\n";
+    let rx = mock_qmp_server(
+        &socket,
+        vec![
+            "{\"QMP\":{\"version\":{\"qemu\":{\"major\":8,\"minor\":2,\"micro\":0}}}}\n",
+            "{\"return\":{}}\n",
+            event_then_return,
+        ],
+    );
+    wait_for_socket(&socket);
+    let mut client = QmpClient::connect(&socket).unwrap();
+    let _ = rx.recv_timeout(Duration::from_secs(2));
+    let snap = dir.path().join("snap.qcow2");
+    // Must succeed: the event line must be skipped, not mistaken for the result.
+    client
+        .create_snapshot("drive-virtio-disk0", &snap, "qcow2")
+        .unwrap();
     client.close();
 }

@@ -12,7 +12,7 @@ mod restore;
 use clap::{Parser, Subcommand};
 use config::RmrfConfig;
 use disk_detect::{parse_disk_format, DiskFormatArg};
-use hypervisor::Hypervisor;
+use hypervisor::{validate_vm_id, Hypervisor};
 use lock::{check_stale_sentinels, store_sentinel_path, try_lock_store, unlock_store};
 use std::path::PathBuf;
 
@@ -248,8 +248,24 @@ fn handle_backup(
     cfg: &RmrfConfig,
     encrypt: Option<&str>,
     live: bool,
-    qmp_socket: Option<&std::path::Path>,
+    _qmp_socket: Option<&std::path::Path>,
 ) -> bool {
+    if live {
+        eprintln!(
+            "Error: --live (QMP live backup) is disabled. \
+             blockdev-snapshot-sync creates an overlay disk with no merge-back \
+             path, which can corrupt the VM disk. Use suspend-based backup \
+             (drop --live) instead."
+        );
+        return false;
+    }
+    if let Some(vm_id) = vm.as_deref() {
+        if let Err(e) = validate_vm_id(vm_id) {
+            eprintln!("Error: {e}");
+            return false;
+        }
+    }
+
     let resolved_path;
     let path = match (path, &vm) {
         (Some(p), _) => p,
@@ -273,13 +289,7 @@ fn handle_backup(
     };
 
     let disk_format = parse_disk_format(&format, path);
-    let lifecycle: Box<dyn rmrf_source::VmLifecycle> = if live {
-        let socket = qmp_socket
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("/var/run/qemu-server"));
-        let device = disk_name.as_deref().unwrap_or("scsi0");
-        Box::new(rmrf_source::QmpLifecycle::new(&socket, device))
-    } else if no_suspend {
+    let lifecycle: Box<dyn rmrf_source::VmLifecycle> = if no_suspend {
         Box::new(rmrf_source::NoopLifecycle)
     } else {
         hypervisor::build_vm_lifecycle(vm.as_deref(), &hypervisor)

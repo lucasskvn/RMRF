@@ -91,7 +91,13 @@ fn vm_source_drop_calls_resume() {
 #[test]
 fn vm_source_suspend_failure_propagates() {
     let path = create_test_file("rmrf_test_vm_sfail", b"suspend fail");
-    let result = VmSource::open(&path, "500", "sda", DiskFormat::Raw, MockLifecycle::failing());
+    let result = VmSource::open(
+        &path,
+        "500",
+        "sda",
+        DiskFormat::Raw,
+        MockLifecycle::failing(),
+    );
     assert!(result.is_err());
     let _ = std::fs::remove_file(&path);
 }
@@ -167,7 +173,10 @@ fn vm_source_qcow2_format_metadata() {
 fn lxc_lifecycle_conforms_to_trait() {
     let lifecycle = ProxmoxLxcLifecycle;
     let result = lifecycle.suspend("9999");
-    assert!(result.is_err(), "pct suspend on non-existent CT should fail");
+    assert!(
+        result.is_err(),
+        "pct suspend on non-existent CT should fail"
+    );
     let result = lifecycle.resume("9999");
     assert!(result.is_err(), "pct resume on non-existent CT should fail");
 }

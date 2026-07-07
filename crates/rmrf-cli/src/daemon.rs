@@ -1,13 +1,17 @@
 use crate::config::{Job, RmrfConfig};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Duration;
 
 static DAEMON_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_path() -> PathBuf {
+    PathBuf::from("/tmp/rmrf-daemon.lock")
+}
 
 fn log_path() -> std::path::PathBuf {
     std::env::var_os("HOME")
@@ -28,28 +32,80 @@ fn log_msg(msg: &str) {
     eprint!("{line}");
 }
 
-fn try_lock_daemon() -> bool {
-    let lock_path = Path::new("/tmp/rmrf-daemon.lock");
-    if lock_path.exists() {
-        if let Ok(pid_str) = fs::read_to_string(lock_path) {
-            if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                if process::Command::new("kill")
-                    .args(["-0", &pid.to_string()])
-                    .status()
-                    .is_ok() {
-                    log_msg("ERROR: another daemon instance is running");
-                    return false;
-                }
-            }
-        }
-    }
-    let pid = process::id();
-    fs::write(lock_path, pid.to_string()).ok();
+/// Returns true if the PID in the lock file is a live process.
+fn pid_alive(pid: u32) -> bool {
+    // `kill -0 <pid>` exits 0 iff the process exists and is signalable.
+    // We must check `.success()`, not `.is_ok()` — the latter only reports
+    // whether `kill` could be spawned, so a dead PID would read as "alive".
+    process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn write_lock(lock_path: &Path) -> bool {
+    let mut file = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)
+    {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    file.write_all(process::id().to_string().as_bytes()).ok();
+    file.sync_all().ok();
     true
 }
 
-fn unlock_daemon() {
-    let _ = fs::remove_file(Path::new("/tmp/rmrf-daemon.lock"));
+fn try_lock_daemon() -> bool {
+    let lock_path = lock_path();
+    if write_lock(&lock_path) {
+        return true;
+    }
+    // Lock exists — only legitimate if its holder is alive.
+    if let Ok(pid_str) = fs::read_to_string(&lock_path) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            if pid_alive(pid) {
+                log_msg("ERROR: another daemon instance is running");
+                return false;
+            }
+            log_msg(&format!(
+                "Warning: removing stale daemon lock from PID {pid}"
+            ));
+        }
+    }
+    let _ = fs::remove_file(&lock_path);
+    write_lock(&lock_path)
+}
+
+/// RAII guard that releases the daemon lock on drop, so an early return or
+/// panic cannot orphan the lock.
+struct DaemonGuard {
+    lock_path: PathBuf,
+    active: bool,
+}
+
+impl DaemonGuard {
+    fn new() -> Option<Self> {
+        if try_lock_daemon() {
+            Some(DaemonGuard {
+                lock_path: lock_path(),
+                active: true,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = fs::remove_file(&self.lock_path);
+            self.active = false;
+        }
+    }
 }
 
 fn run_job(job: &Job, cfg: &RmrfConfig) -> bool {
@@ -114,9 +170,10 @@ fn run_job(job: &Job, cfg: &RmrfConfig) -> bool {
 }
 
 pub fn run_daemon(once: bool, job_name: Option<&str>, cfg: &RmrfConfig) -> bool {
-    if !try_lock_daemon() {
-        return false;
-    }
+    let _guard = match DaemonGuard::new() {
+        Some(g) => g,
+        None => return false,
+    };
 
     let jobs: Vec<&Job> = if let Some(name) = job_name {
         cfg.jobs.iter().filter(|j| j.name == name).collect()
@@ -126,7 +183,6 @@ pub fn run_daemon(once: bool, job_name: Option<&str>, cfg: &RmrfConfig) -> bool 
 
     if jobs.is_empty() {
         log_msg("ERROR: no matching jobs found in config");
-        unlock_daemon();
         return false;
     }
 
@@ -134,7 +190,6 @@ pub fn run_daemon(once: bool, job_name: Option<&str>, cfg: &RmrfConfig) -> bool 
         for job in &jobs {
             run_job(job, cfg);
         }
-        unlock_daemon();
         return true;
     }
 
