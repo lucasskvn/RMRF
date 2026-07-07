@@ -93,6 +93,8 @@ enum Command {
         store: Option<PathBuf>,
         #[arg(long)]
         rehash: bool,
+        #[arg(long)]
+        identity: Option<String>,
     },
     Gc {
         #[arg(short, long)]
@@ -111,9 +113,14 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-    let cfg = cli.config.as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok()
-            .and_then(|s| toml::from_str(&s).ok()))
+    let cfg = cli
+        .config
+        .as_ref()
+        .and_then(|p| {
+            std::fs::read_to_string(p)
+                .ok()
+                .and_then(|s| toml::from_str(&s).ok())
+        })
         .unwrap_or_else(config::load_config);
 
     let store = match &cli.command {
@@ -170,14 +177,39 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             force,
             jobs,
             identity,
-        } => restore::restore(&manifest, store.as_deref().unwrap_or(&cfg.store), output.as_deref(), force, jobs, identity.as_deref()),
-        Command::List { store, since, before, source } => {
-            commands::list(store.as_deref().unwrap_or(&cfg.store), since.as_deref(), before.as_deref(), source.as_deref())
+        } => restore::restore(
+            &manifest,
+            store.as_deref().unwrap_or(&cfg.store),
+            output.as_deref(),
+            force,
+            jobs,
+            identity.as_deref(),
+        ),
+        Command::List {
+            store,
+            since,
+            before,
+            source,
+        } => commands::list(
+            store.as_deref().unwrap_or(&cfg.store),
+            since.as_deref(),
+            before.as_deref(),
+            source.as_deref(),
+        ),
+        Command::Info { manifest, store } => {
+            commands::info(&manifest, store.as_deref().unwrap_or(&cfg.store))
         }
-        Command::Info { manifest, store } => commands::info(&manifest, store.as_deref().unwrap_or(&cfg.store)),
-        Command::Verify { manifest, store, rehash } => {
-            commands::verify(&manifest, store.as_deref().unwrap_or(&cfg.store), rehash)
-        }
+        Command::Verify {
+            manifest,
+            store,
+            rehash,
+            identity,
+        } => commands::verify(
+            &manifest,
+            store.as_deref().unwrap_or(&cfg.store),
+            rehash,
+            identity.as_deref(),
+        ),
         Command::Gc { store, dry_run } => {
             let store = store.as_deref().unwrap_or(&cfg.store);
             if !try_lock_store(store) {
@@ -198,9 +230,7 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             }
             true
         }
-        Command::Daemon { once, job } => {
-            daemon::run_daemon(once, job.as_deref(), cfg)
-        }
+        Command::Daemon { once, job } => daemon::run_daemon(once, job.as_deref(), cfg),
     }
 }
 
@@ -244,7 +274,8 @@ fn handle_backup(
 
     let disk_format = parse_disk_format(&format, path);
     let lifecycle: Box<dyn rmrf_source::VmLifecycle> = if live {
-        let socket = qmp_socket.map(|p| p.to_path_buf())
+        let socket = qmp_socket
+            .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("/var/run/qemu-server"));
         let device = disk_name.as_deref().unwrap_or("scsi0");
         Box::new(rmrf_source::QmpLifecycle::new(&socket, device))
@@ -263,7 +294,16 @@ fn handle_backup(
             .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
         let sentinel = store_sentinel_path(store, vm_id);
         std::fs::write(&sentinel, chrono::Utc::now().to_rfc3339()).ok();
-        let result = backup::backup_vm(path, store, vm_id, disk_label, disk_format, lifecycle, cfg, encrypt);
+        let result = backup::backup_vm(
+            path,
+            store,
+            vm_id,
+            disk_label,
+            disk_format,
+            lifecycle,
+            cfg,
+            encrypt,
+        );
         std::fs::remove_file(&sentinel).ok();
         result
     } else {

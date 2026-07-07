@@ -27,9 +27,21 @@ impl Manifest {
     pub fn save(&self, path: &Path) -> Result<()> {
         let data = bincode::serialize(self)
             .map_err(|e| RmrfError::Msg(format!("manifest serialize: {e}")))?;
-        let mut file = fs::File::create(path)?;
-        file.write_all(&data)?;
-        file.sync_all()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let tmp_path = path.with_extension("bincode.tmp");
+        {
+            let mut file = fs::File::create(&tmp_path)?;
+            file.write_all(&data)?;
+            file.sync_all()?;
+        }
+        fs::rename(&tmp_path, path)?;
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = fs::File::open(parent) {
+                dir.sync_all().ok();
+            }
+        }
         Ok(())
     }
 

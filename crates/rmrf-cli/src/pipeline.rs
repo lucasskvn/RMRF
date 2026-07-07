@@ -43,7 +43,11 @@ pub fn run_chunk_pipeline(
         Ok(idx) => idx,
         Err(e) => {
             eprintln!("Error: failed to load dedup index: {e}");
-            return BackupStats { chunks: 0, bytes: 0, dedup_skipped: 0 };
+            return BackupStats {
+                chunks: 0,
+                bytes: 0,
+                dedup_skipped: 0,
+            };
         }
     };
 
@@ -85,7 +89,9 @@ fn run_chunk_loop(
                 chunk_hashes.push(info.hash);
                 chunk_count += 1;
                 total_bytes += info.data_len as u64;
-                if info.was_duplicate { dedup_skipped += 1; }
+                if info.was_duplicate {
+                    dedup_skipped += 1;
+                }
                 pb.inc(1);
                 pb.set_message(format!("{dedup_skipped}"));
                 pb.set_position(chunk_count);
@@ -93,15 +99,30 @@ fn run_chunk_loop(
             Err(e) => {
                 pb.finish_and_clear();
                 eprintln!("{e}");
-                return BackupStats { chunks: 0, bytes: 0, dedup_skipped: 0 };
+                return BackupStats {
+                    chunks: 0,
+                    bytes: 0,
+                    dedup_skipped: 0,
+                };
             }
         }
     }
 
     pb.finish_and_clear();
-    finish_backup(&chunk_hashes, dedup_index, metadata, store_dir, timestamp, label,
-                  BackupStats { chunks: chunk_count, bytes: total_bytes, dedup_skipped },
-                  encryption)
+    finish_backup(
+        &chunk_hashes,
+        dedup_index,
+        metadata,
+        store_dir,
+        timestamp,
+        label,
+        BackupStats {
+            chunks: chunk_count,
+            bytes: total_bytes,
+            dedup_skipped,
+        },
+        encryption,
+    )
 }
 
 fn feed_chunk(
@@ -117,7 +138,11 @@ fn feed_chunk(
         ProcessResult::Stored => false,
         ProcessResult::Error(e) => return Err(e),
     };
-    Ok(ChunkInfo { hash, data_len: data.len(), was_duplicate })
+    Ok(ChunkInfo {
+        hash,
+        data_len: data.len(),
+        was_duplicate,
+    })
 }
 
 fn process_chunk(
@@ -127,20 +152,18 @@ fn process_chunk(
     dedup_index: &mut PersistentDedupIndex,
 ) -> ProcessResult {
     match dedup_index.lookup(hash) {
-        Ok(Some(_)) => {
-            match chunk_store.exists(hash) {
-                Ok(true) => {
-                    if let Err(e) = dedup_index.increment_refcount(hash) {
-                        return ProcessResult::Error(format!("Error incrementing refcount: {e}"));
-                    }
-                    return ProcessResult::Skipped;
+        Ok(Some(_)) => match chunk_store.exists(hash) {
+            Ok(true) => {
+                if let Err(e) = dedup_index.increment_refcount(hash) {
+                    return ProcessResult::Error(format!("Error incrementing refcount: {e}"));
                 }
-                Ok(false) => {}
-                Err(e) => {
-                    return ProcessResult::Error(format!("Error checking chunk existence: {e}"));
-                }
+                return ProcessResult::Skipped;
             }
-        }
+            Ok(false) => {}
+            Err(e) => {
+                return ProcessResult::Error(format!("Error checking chunk existence: {e}"));
+            }
+        },
         Err(e) => {
             return ProcessResult::Error(format!("Error looking up dedup index: {e}"));
         }
@@ -152,8 +175,7 @@ fn process_chunk(
             let compressed_raw = match chunk_store.get_raw(hash) {
                 Ok(d) => d,
                 Err(e) => {
-                    return ProcessResult::Error(
-                        format!("Failed to get compressed size: {e}"));
+                    return ProcessResult::Error(format!("Failed to get compressed size: {e}"));
                 }
             };
             let compressed_size = compressed_raw
@@ -182,7 +204,15 @@ fn finish_backup(
     if let Err(e) = dedup_index.save() {
         eprintln!("Warning: failed to save dedup index: {e}");
     }
-    save_manifest(chunk_hashes, metadata, store_dir, timestamp, label, stats, encryption)
+    save_manifest(
+        chunk_hashes,
+        metadata,
+        store_dir,
+        timestamp,
+        label,
+        stats,
+        encryption,
+    )
 }
 
 fn save_manifest(
@@ -221,8 +251,7 @@ fn save_manifest(
 fn create_backup_spinner() -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
+        ProgressStyle::with_template("{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
             .unwrap_or_else(|_| ProgressStyle::default_spinner())
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
     );

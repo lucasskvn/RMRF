@@ -15,31 +15,41 @@ pub fn gc(store_dir: &Path, dry_run: bool) -> bool {
         eprintln!("Error: store directory not found: {}", store_dir.display());
         return false;
     }
-    let referenced = collect_referenced_hashes(store_dir);
+    let referenced = match collect_referenced_hashes(store_dir) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            eprintln!("Aborting GC: fix or remove the unreadable manifest before retrying.");
+            return false;
+        }
+    };
     let stats = scan_and_delete_orphans(store_dir, &referenced, dry_run);
     print_gc_report(&stats, dry_run);
     true
 }
 
-fn collect_referenced_hashes(store_dir: &Path) -> HashSet<[u8; 32]> {
+fn collect_referenced_hashes(store_dir: &Path) -> Result<HashSet<[u8; 32]>, String> {
     let manifests_dir = store_dir.join("manifests");
     let mut referenced = HashSet::new();
 
-    if let Ok(entries) = fs::read_dir(&manifests_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_none_or(|ext| ext != "bincode") {
-                continue;
-            }
-            if let Ok(m) = Manifest::load(&path) {
-                for hash in m.chunks {
-                    referenced.insert(hash);
-                }
-            }
+    let entries = match fs::read_dir(&manifests_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(referenced),
+        Err(e) => return Err(format!("cannot read manifests directory: {e}")),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "bincode") {
+            continue;
+        }
+        let manifest = Manifest::load(&path)
+            .map_err(|e| format!("manifest {} is unreadable: {e}", path.display()))?;
+        for hash in manifest.chunks {
+            referenced.insert(hash);
         }
     }
-
-    referenced
+    Ok(referenced)
 }
 
 fn scan_and_delete_orphans(
@@ -94,8 +104,7 @@ fn scan_prefix(
     if let Ok(inner_entries) = fs::read_dir(prefix.path()) {
         for inner in inner_entries.flatten() {
             let inner_name = inner.file_name().to_string_lossy().to_string();
-            try_delete_orphan(
-                &inner, &inner_name, &name, referenced, dry_run, &mut stats);
+            try_delete_orphan(&inner, &inner_name, &name, referenced, dry_run, &mut stats);
         }
     }
 
@@ -128,13 +137,19 @@ fn try_delete_orphan(
 
     let size = inner.metadata().map(|m| m.len()).unwrap_or(0);
     if dry_run {
-        println!("Would delete orphan: {name}/{inner_name} ({})", format_size(size));
+        println!(
+            "Would delete orphan: {name}/{inner_name} ({})",
+            format_size(size)
+        );
     } else {
         if let Err(e) = fs::remove_file(inner.path()) {
             eprintln!("Error deleting {name}/{inner_name}: {e}");
             return;
         }
-        println!("Deleted orphan: {name}/{inner_name} ({})", format_size(size));
+        println!(
+            "Deleted orphan: {name}/{inner_name} ({})",
+            format_size(size)
+        );
     }
     stats.orphans += 1;
     stats.freed_bytes += size;
