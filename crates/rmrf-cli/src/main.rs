@@ -73,6 +73,12 @@ enum Command {
     List {
         #[arg(short, long)]
         store: Option<PathBuf>,
+        #[arg(long, help = "Show only backups after this date (YYYYMMDD)")]
+        since: Option<String>,
+        #[arg(long, help = "Show only backups before this date (YYYYMMDD)")]
+        before: Option<String>,
+        #[arg(long, help = "Filter by source path (substring match)")]
+        source: Option<String>,
     },
     Info {
         manifest: PathBuf,
@@ -104,7 +110,7 @@ fn main() {
     let store = match &cli.command {
         Command::Backup { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Restore { store, .. } => store.as_deref().unwrap_or(&cfg.store),
-        Command::List { store } => store.as_deref().unwrap_or(&cfg.store),
+        Command::List { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Info { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Verify { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Gc { store, .. } => store.as_deref().unwrap_or(&cfg.store),
@@ -155,7 +161,9 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             jobs,
             identity,
         } => restore::restore(&manifest, store.as_deref().unwrap_or(&cfg.store), output.as_deref(), force, jobs, identity.as_deref()),
-        Command::List { store } => commands::list(store.as_deref().unwrap_or(&cfg.store)),
+        Command::List { store, since, before, source } => {
+            commands::list(store.as_deref().unwrap_or(&cfg.store), since.as_deref(), before.as_deref(), source.as_deref())
+        }
         Command::Info { manifest, store } => commands::info(&manifest, store.as_deref().unwrap_or(&cfg.store)),
         Command::Verify { manifest, store, rehash } => {
             commands::verify(&manifest, store.as_deref().unwrap_or(&cfg.store), rehash)
