@@ -40,11 +40,5 @@ fn print_manifest_entry(entry: &fs::DirEntry) {
     };
     let basename = path.file_name().unwrap_or_default().to_string_lossy();
     let timestamp = basename.split('-').next().unwrap_or("unknown");
-    println!(
-        "{}  {:>9}  {:>4} chunks  {}",
-        timestamp,
-        format_size(manifest.source.size),
-        manifest.chunks.len(),
-        manifest.source.path,
-    );
+    println!("{}  {:>9}  {:>4} chunks  {}", timestamp, format_size(manifest.source.size),manifest.chunks.len(), manifest.source.path,);
 }

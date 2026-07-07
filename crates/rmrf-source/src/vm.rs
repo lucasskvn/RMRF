@@ -4,8 +4,6 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 
-// ── VmLifecycle trait ────────────────────────────────────────────
-
 pub trait VmLifecycle {
     fn suspend(&self, vm_id: &str) -> rmrf_core::Result<()>;
     fn resume(&self, vm_id: &str) -> rmrf_core::Result<()>;
@@ -20,8 +18,6 @@ impl VmLifecycle for Box<dyn VmLifecycle> {
     }
 }
 
-// ── NoopLifecycle ───────────────────────────────────────────────
-
 pub struct NoopLifecycle;
 
 impl VmLifecycle for NoopLifecycle {
@@ -32,8 +28,6 @@ impl VmLifecycle for NoopLifecycle {
         Ok(())
     }
 }
-
-// ── ProxmoxLifecycle ────────────────────────────────────────────
 
 pub struct ProxmoxLifecycle;
 
@@ -58,7 +52,6 @@ fn run_qm(action: &str, vm_id: &str) -> rmrf_core::Result<()> {
     Ok(())
 }
 
-// ── ProxmoxLxcLifecycle ────────────────────────────────────────
 
 pub struct ProxmoxLxcLifecycle;
 
@@ -83,8 +76,6 @@ fn run_pct(action: &str, vm_id: &str) -> rmrf_core::Result<()> {
     Ok(())
 }
 
-// ── LibvirtLifecycle ────────────────────────────────────────────
-
 pub struct LibvirtLifecycle;
 
 impl VmLifecycle for LibvirtLifecycle {
@@ -107,8 +98,6 @@ fn run_virsh(action: &str, vm_id: &str) -> rmrf_core::Result<()> {
     }
     Ok(())
 }
-
-// ── VmSource ────────────────────────────────────────────────────
 
 pub struct VmSource<L: VmLifecycle> {
     pub(crate) source: FileSource,

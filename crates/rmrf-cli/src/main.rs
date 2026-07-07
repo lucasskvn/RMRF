@@ -21,6 +21,7 @@ enum Hypervisor {
 }
 
 impl fmt::Display for Hypervisor {
+
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Hypervisor::Auto => write!(f, "auto"),
@@ -55,81 +56,54 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a backup of a file, directory, or VM disk
     Backup {
-        /// Path to the file, directory, or VM disk to backup (auto-detected with --vm if omitted)
         path: Option<PathBuf>,
-        /// Store directory (where chunks, manifests, and index live)
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
-        /// Delete manifests older than N days after backup, then run GC
         #[arg(long)]
         retain: Option<u64>,
-        /// VM ID for VM/LXC disk backup (auto-detects qm vs pct)
         #[arg(long)]
         vm: Option<String>,
-        /// Disk selector (e.g. scsi1, virtio0, rootfs, mp0). Default: first disk
         #[arg(long)]
         disk: Option<String>,
-        /// Disk name for VM metadata (default: basename of path)
         #[arg(long)]
         disk_name: Option<String>,
-        /// Disk format: auto (detect from extension), raw, or qcow2
         #[arg(long, default_value = "auto")]
         format: DiskFormatArg,
-        /// Skip VM suspend/resume (for already-snapshotted disks)
         #[arg(long)]
         no_suspend: bool,
-        /// Hypervisor type: auto, proxmox, proxmox-lxc, libvirt, noop
         #[arg(long, default_value = "auto")]
         hypervisor: Hypervisor,
     },
-    /// Restore a file from a backup manifest
     Restore {
-        /// Path to the manifest file (.bincode)
         manifest: PathBuf,
-        /// Store directory (where chunks live)
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
-        /// Output path for the restored file (default: manifest basename in CWD)
         #[arg(short, long)]
         output: Option<PathBuf>,
-        /// Overwrite existing output file (safety: restore refuses without this flag)
         #[arg(long)]
         force: bool,
     },
-    /// List all backups in the store
     List {
-        /// Store directory
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
     },
-    /// Show detailed info for a specific backup
     Info {
-        /// Path to the manifest file (.bincode)
         manifest: PathBuf,
-        /// Store directory
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
     },
-    /// Verify a backup (check all chunks exist on disk)
     Verify {
-        /// Path to the manifest file (.bincode)
         manifest: PathBuf,
-        /// Store directory
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
     },
-    /// Garbage collect orphan chunks (not referenced by any manifest)
     Gc {
-        /// Store directory
         #[arg(short, long, default_value = DEFAULT_STORE)]
         store: PathBuf,
-        /// Dry run: report what would be deleted without deleting
         #[arg(long)]
         dry_run: bool,
     },
-    /// Clean test artifacts from the current directory
     Clean,
 }
 
@@ -274,10 +248,7 @@ fn run_cmd(cmd: &str, args: &[&str]) -> bool {
 const QM_DISK_PREFIXES: &[&str] = &["scsi", "virtio", "ide", "sata", "efidisk", "tpmstate"];
 const PCT_DISK_PREFIXES: &[&str] = &["rootfs", "mp"];
 
-fn detect_disk_path(
-    vm_id: &str,
-    disk_spec: Option<&str>,
-) -> Result<(PathBuf, String), String> {
+fn detect_disk_path(vm_id: &str, disk_spec: Option<&str>, ) -> Result<(PathBuf, String), String> {
     if let Some(result) = try_qm_config(vm_id, disk_spec)? {
         return Ok(result);
     }
@@ -287,10 +258,7 @@ fn detect_disk_path(
     Err("no disk found in VM config (tried qm + pct)".to_string())
 }
 
-fn try_qm_config(
-    vm_id: &str,
-    disk_spec: Option<&str>,
-) -> Result<Option<(PathBuf, String)>, String> {
+fn try_qm_config( vm_id: &str, disk_spec: Option<&str>, ) -> Result<Option<(PathBuf, String)>, String> {
     let output = std::process::Command::new("qm")
         .args(["config", vm_id])
         .output()
@@ -302,10 +270,7 @@ fn try_qm_config(
     find_disk_from_config(&config, QM_DISK_PREFIXES, disk_spec)
 }
 
-fn try_pct_config(
-    vm_id: &str,
-    disk_spec: Option<&str>,
-) -> Result<Option<(PathBuf, String)>, String> {
+fn try_pct_config( vm_id: &str, disk_spec: Option<&str>, ) -> Result<Option<(PathBuf, String)>, String> {
     let output = std::process::Command::new("pct")
         .args(["config", vm_id])
         .output()
@@ -317,11 +282,7 @@ fn try_pct_config(
     find_disk_from_config(&config, PCT_DISK_PREFIXES, disk_spec)
 }
 
-fn find_disk_from_config(
-    config: &str,
-    prefixes: &[&str],
-    disk_spec: Option<&str>,
-) -> Result<Option<(PathBuf, String)>, String> {
+fn find_disk_from_config( config: &str, prefixes: &[&str], disk_spec: Option<&str>,) -> Result<Option<(PathBuf, String)>, String> {
     for line in config.lines() {
         let line = line.trim();
         let Some((prefix, rest)) = line.split_once(':') else {

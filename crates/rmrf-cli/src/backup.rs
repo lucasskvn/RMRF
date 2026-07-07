@@ -283,9 +283,7 @@ fn create_backup_spinner() -> ProgressBar {
     pb
 }
 
-fn process_chunk(
-    hash: &[u8; 32],
-    data: &[u8],
+fn process_chunk(hash: &[u8; 32], data: &[u8],
     chunk_store: &mut CompressedChunkStore<LocalChunkStore>,
     dedup_index: &mut PersistentDedupIndex,
 ) -> ProcessResult {
@@ -352,6 +350,5 @@ fn save_manifest(
     println!("Chunks: {}", stats.chunks);
     println!("Total bytes: {}", stats.bytes);
     println!("Dedup skipped (already stored): {}", stats.dedup_skipped);
-
     stats
 }
