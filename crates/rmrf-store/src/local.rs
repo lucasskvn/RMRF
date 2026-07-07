@@ -1,5 +1,6 @@
 use rmrf_core::{ChunkLocation, ChunkStore, Hash, Result as RmrfResult, RmrfError};
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 pub struct LocalChunkStore {
@@ -27,7 +28,9 @@ impl ChunkStore for LocalChunkStore {
             .parent()
             .ok_or_else(|| RmrfError::Msg("invalid chunk path: no parent directory".into()))?;
         fs::create_dir_all(parent)?;
-        fs::write(&path, data)?;
+        let mut file = fs::File::create(&path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
 
         let prefix = parent
             .file_name()

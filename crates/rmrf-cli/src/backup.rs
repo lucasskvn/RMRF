@@ -60,11 +60,16 @@ fn backup_dir(dir: &Path, store_dir: &Path) -> bool {
 
     println!("Found {} files", files.len());
     let mut stats = DirStats::default();
+    let mut errors = 0u64;
     for path in &files {
         let rel = compute_rel_label(path, dir);
-        if let Some(s) = backup_file(path, store_dir, &timestamp, &rel) {
-            stats.add(s);
+        match backup_file(path, store_dir, &timestamp, &rel) {
+            Some(s) => stats.add(s),
+            None => errors += 1,
         }
+    }
+    if errors > 0 {
+        eprintln!("Warning: {errors} file(s) failed to backup");
     }
 
     println!("Directory backup complete!");
@@ -83,14 +88,18 @@ fn walk_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, io::Error> {
     let mut files = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            continue;
+        }
         let path = entry.path();
         let name = path.file_name();
         if name.is_none_or(|n| n.to_string_lossy().starts_with('.')) {
             continue;
         }
-        if path.is_dir() {
+        if ft.is_dir() {
             files.extend(walk_files(&path)?);
-        } else if path.is_file() {
+        } else if ft.is_file() {
             files.push(path);
         }
     }
@@ -110,7 +119,14 @@ fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str) ->
     };
 
     let metadata = file_source.metadata();
-    Some(run_chunk_pipeline(&mut file_source, metadata, store_dir, timestamp, label))
+    let file_size = metadata.size;
+    let stats = run_chunk_pipeline(&mut file_source, metadata, store_dir, timestamp, label);
+    if stats.chunks == 0 && file_size > 0 {
+        eprintln!("Warning: backup produced 0 chunks for non-empty file");
+        None
+    } else {
+        Some(stats)
+    }
 }
 
 pub fn backup_vm(
@@ -137,14 +153,19 @@ pub fn backup_vm(
         .to_string_lossy()
         .to_string();
 
-    run_chunk_pipeline(
+    let stats = run_chunk_pipeline(
         &mut vm_source,
         metadata,
         store_dir,
         &timestamp,
         &basename,
     );
-    true
+    if stats.chunks == 0 {
+        eprintln!("Warning: backup produced 0 chunks for VM disk");
+        false
+    } else {
+        true
+    }
 }
 
 fn run_chunk_pipeline(
@@ -289,10 +310,20 @@ fn process_chunk(hash: &[u8; 32], data: &[u8],
 ) -> ProcessResult {
     match dedup_index.lookup(hash) {
         Ok(Some(_)) => {
-            if let Err(e) = dedup_index.increment_refcount(hash) {
-                return ProcessResult::Error(format!("Error incrementing refcount: {e}"));
+            match chunk_store.exists(hash) {
+                Ok(true) => {
+                    if let Err(e) = dedup_index.increment_refcount(hash) {
+                        return ProcessResult::Error(format!("Error incrementing refcount: {e}"));
+                    }
+                    return ProcessResult::Skipped;
+                }
+                Ok(false) => {
+                    // Chunk in index but missing on disk — re-store
+                }
+                Err(e) => {
+                    return ProcessResult::Error(format!("Error checking chunk existence: {e}"));
+                }
             }
-            return ProcessResult::Skipped;
         }
         Err(e) => {
             return ProcessResult::Error(format!("Error looking up dedup index: {e}"));
@@ -302,9 +333,11 @@ fn process_chunk(hash: &[u8; 32], data: &[u8],
     let uncompressed = data.len() as u32;
     match chunk_store.put(hash, data) {
         Ok(location) => {
-            let compressed_size = chunk_store.get_raw(hash)
-                .ok()
-                .flatten()
+            let compressed_raw = match chunk_store.get_raw(hash) {
+                Ok(d) => d,
+                Err(e) => return ProcessResult::Error(format!("Failed to get compressed size: {e}")),
+            };
+            let compressed_size = compressed_raw
                 .map(|d| d.len() as u32)
                 .unwrap_or(uncompressed);
             if let Err(e) = dedup_index.insert(hash, location, uncompressed, compressed_size) {
@@ -340,7 +373,12 @@ fn save_manifest(
         eprintln!("Error creating manifests directory: {e}");
         return stats;
     }
-    let manifest_path = manifests_dir.join(format!("{timestamp}-{label}.bincode"));
+    let mut manifest_path = manifests_dir.join(format!("{timestamp}-{label}.bincode"));
+    let mut collision = 0u64;
+    while manifest_path.exists() {
+        collision += 1;
+        manifest_path = manifests_dir.join(format!("{timestamp}-{label}-{collision}.bincode"));
+    }
 
     match manifest.save(&manifest_path) {
         Ok(_) => println!("\nManifest saved: {}", manifest_path.display()),

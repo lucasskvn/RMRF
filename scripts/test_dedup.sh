@@ -58,9 +58,8 @@ fi
 
 # Test 2: Restore after second backup, verify bit-identical
 MANIFEST=$(ls -t "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
-OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
-if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
+$RMRF -- restore "$MANIFEST" -s "$STORE" -o "$TEST_DIR/restored.bin" > /dev/null 2>&1
+if diff "$INPUT" "$TEST_DIR/restored.bin" > /dev/null 2>&1; then
     pass_msg "Restore after double backup: bit-identical"
 else
     fail_msg "Restore after double backup: diff mismatch"

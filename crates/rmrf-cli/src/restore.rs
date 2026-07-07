@@ -4,6 +4,8 @@ use rmrf_manifest::Manifest;
 use rmrf_store::{CompressedChunkStore, LocalChunkStore};
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, force: bool) -> bool {
@@ -52,6 +54,9 @@ fn is_empty_manifest(manifest: &Manifest, output_path: &Path) -> bool {
         if let Err(e) = fs::write(output_path, b"") {
             eprintln!("Error writing empty file: {e}");
             return false;
+        }
+        if let Ok(f) = fs::File::open(output_path) {
+            f.sync_all().ok();
         }
         println!("Restored empty file: {}", output_path.display());
         true
@@ -124,6 +129,15 @@ pub fn restore_file(
             }
         }
     }
+    output.sync_all()?;
+    #[cfg(unix)]
+    {
+        let mode = manifest.source.permissions;
+        if mode != 0 {
+            output.set_permissions(fs::Permissions::from_mode(mode)).ok();
+        }
+    }
+    drop(output);
     pb.finish_and_clear();
 
     println!("Total chunks restored: {total}");

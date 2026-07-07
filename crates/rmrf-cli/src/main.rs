@@ -10,6 +10,59 @@ use std::fmt;
 use std::path::PathBuf;
 
 const DEFAULT_STORE: &str = "./rmrf-store";
+const STORE_LOCK: &str = ".rmrf.lock";
+
+fn try_lock_store(store: &std::path::Path) -> bool {
+    if let Err(e) = std::fs::create_dir_all(store) {
+        eprintln!("Error: cannot create store directory: {e}");
+        return false;
+    }
+    let lock_path = store.join(STORE_LOCK);
+    if let Ok(pid_str) = std::fs::read_to_string(&lock_path) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            let alive = std::path::Path::new(&format!("/proc/{pid}")).exists();
+            if alive {
+                eprintln!("Error: store is locked by process {pid}");
+                return false;
+            }
+            eprintln!("Warning: removing stale lock from PID {pid}");
+        }
+    }
+    if let Err(e) = std::fs::write(&lock_path, format!("{}", std::process::id())) {
+        eprintln!("Error: cannot write store lock: {e}");
+        return false;
+    }
+    true
+}
+
+fn unlock_store(store: &std::path::Path) {
+    let lock_path = store.join(STORE_LOCK);
+    std::fs::remove_file(&lock_path).ok();
+}
+
+fn store_sentinel_path(store: &std::path::Path, vm_id: &str) -> std::path::PathBuf {
+    store.join(format!(".suspended-{vm_id}"))
+}
+
+fn check_stale_sentinels(store: &std::path::Path) {
+    if !store.exists() {
+        return;
+    }
+    if let Ok(dir) = std::fs::read_dir(store) {
+        for entry in dir.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if let Some(vm_id) = name_str.strip_prefix(".suspended-") {
+                eprintln!(
+                    "Warning: VM {vm_id} may be suspended — sentinel file {} exists",
+                    entry.path().display()
+                );
+                eprintln!("  This can happen if the backup process was killed");
+                eprintln!("  Check VM status: qm status {vm_id} | pct status {vm_id}");
+            }
+        }
+    }
+}
 
 #[derive(ValueEnum, Clone)]
 enum Hypervisor {
@@ -108,6 +161,16 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
+    let store = match &cli.command {
+        Command::Backup { store, .. } => store,
+        Command::Restore { store, .. } => store,
+        Command::List { store } => store,
+        Command::Info { store, .. } => store,
+        Command::Verify { store, .. } => store,
+        Command::Gc { store, .. } => store,
+    };
+    check_stale_sentinels(store);
+
     let ok = match cli.command {
         Command::Backup {
             path,
@@ -139,7 +202,13 @@ fn main() {
         Command::List { store } => commands::list(&store),
         Command::Info { manifest, store } => commands::info(&manifest, &store),
         Command::Verify { manifest, store } => commands::verify(&manifest, &store),
-        Command::Gc { store, dry_run } => commands::gc(&store, dry_run),
+        Command::Gc { store, dry_run } => {
+            if !try_lock_store(&store) { false } else {
+                let ok = commands::gc(&store, dry_run);
+                unlock_store(&store);
+                ok
+            }
+        }
     };
     if !ok {
         std::process::exit(1);
@@ -187,24 +256,34 @@ fn handle_backup(
         build_vm_lifecycle(vm.as_deref(), &hypervisor)
     };
 
-    let ok = if let Some(vm_id) = vm {
+    if !try_lock_store(store) {
+        return false;
+    }
+    let ok = if let Some(vm_id) = &vm {
         let disk_label = disk_name
             .as_deref()
             .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
-        backup::backup_vm(path, store, &vm_id, disk_label, disk_format, lifecycle)
+        let sentinel = store_sentinel_path(store, vm_id);
+        std::fs::write(&sentinel, chrono::Utc::now().to_rfc3339()).ok();
+        let result = backup::backup_vm(path, store, vm_id, disk_label, disk_format, lifecycle);
+        std::fs::remove_file(&sentinel).ok();
+        result
     } else {
         backup::backup(path, store)
     };
 
     if !ok {
+        unlock_store(store);
         return false;
     }
 
-    if let Some(days) = retain {
+    let ok = if let Some(days) = retain {
         commands::run_retention_and_gc(store, days)
     } else {
         true
-    }
+    };
+    unlock_store(store);
+    ok
 }
 
 fn parse_disk_format(arg: &DiskFormatArg, path: &std::path::Path) -> DiskFormat {
@@ -281,6 +360,7 @@ fn try_pct_config( vm_id: &str, disk_spec: Option<&str>, ) -> Result<Option<(Pat
 }
 
 fn find_disk_from_config( config: &str, prefixes: &[&str], disk_spec: Option<&str>,) -> Result<Option<(PathBuf, String)>, String> {
+    let mut candidates: Vec<(&str, &str)> = Vec::new();
     for line in config.lines() {
         let line = line.trim();
         let Some((prefix, rest)) = line.split_once(':') else {
@@ -294,15 +374,28 @@ fn find_disk_from_config( config: &str, prefixes: &[&str], disk_spec: Option<&st
             if prefix != spec {
                 continue;
             }
+            let rest = rest.trim();
+            let volume = rest.split(',').next().unwrap_or(rest).trim();
+            if volume.is_empty() || volume == "none" {
+                continue;
+            }
+            return resolve_pvesm_path(volume);
         }
         let rest = rest.trim();
         let volume = rest.split(',').next().unwrap_or(rest).trim();
         if volume.is_empty() || volume == "none" {
             continue;
         }
-        return resolve_pvesm_path(volume);
+        candidates.push((prefix, volume));
     }
-    Ok(None)
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    // Prefer main disks over EFI/TPM (usually the first non-efi/tpm one)
+    candidates.sort_by_key(|(name, _)| {
+        if name.starts_with("efidisk") || name.starts_with("tpmstate") { 1 } else { 0 }
+    });
+    resolve_pvesm_path(candidates[0].1)
 }
 
 fn resolve_pvesm_path(volume: &str) -> Result<Option<(PathBuf, String)>, String> {

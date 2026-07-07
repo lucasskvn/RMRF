@@ -39,23 +39,26 @@ do_size_test() {
     }
     if ! $RMRF -- backup "$INPUT" -s "$STORE" > /dev/null 2>&1; then
         fail_msg "$label: backup failed"
-        rm -rf "${STORE:?}/"*
+        rm -rf "${STORE:?}/"
+    mkdir -p "$STORE"
         return
     fi
     MANIFEST=$(ls -t "$STORE/manifests/"*.bincode | head -1)
-    if ! $RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1; then
+    rm -f "$TEST_DIR/restored.bin"
+    if ! $RMRF -- restore "$MANIFEST" -s "$STORE" -o "$TEST_DIR/restored.bin" > /dev/null 2>&1; then
         fail_msg "$label: restore failed"
-        rm -rf "${STORE:?}/"*
+        rm -rf "${STORE:?}/"
+        mkdir -p "$STORE"
         return
     fi
-    OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
-    if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
+    if diff "$INPUT" "$TEST_DIR/restored.bin" > /dev/null 2>&1; then
         local chunk_count=$(find "$STORE/manifests/" -name "*.bincode" -exec bincode 2>/dev/null \; | wc -l || echo "?")
         pass_msg "$label: bit-identical"
     else
         fail_msg "$label: diff mismatch"
     fi
-    rm -rf "${STORE:?}/"*
+    rm -rf "${STORE:?}/"
+    mkdir -p "$STORE"
 }
 
 echo "Size stress tests (random data):"

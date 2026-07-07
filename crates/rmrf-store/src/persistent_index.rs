@@ -1,6 +1,7 @@
 use rmrf_core::{ChunkLocation, DedupIndex, Hash, IndexEntry, Result as RmrfResult, RmrfError};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 pub struct PersistentDedupIndex {
@@ -26,7 +27,18 @@ impl PersistentDedupIndex {
         }
         let data = bincode::serialize(&self.entries)
             .map_err(|e| RmrfError::Msg(format!("Failed to serialize dedup index: {e}")))?;
-        fs::write(&self.save_path, data)?;
+        let tmp_path = self.save_path.with_extension("tmp");
+        {
+            let mut file = fs::File::create(&tmp_path)?;
+            file.write_all(&data)?;
+            file.sync_all()?;
+        }
+        fs::rename(&tmp_path, &self.save_path)?;
+        if let Some(parent) = self.save_path.parent() {
+            if let Ok(dir) = fs::File::open(parent) {
+                dir.sync_all().ok();
+            }
+        }
         Ok(())
     }
 

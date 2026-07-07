@@ -1,6 +1,7 @@
 use rmrf_core::{Hash, Result, RmrfError, SourceMetadata};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 pub const MANIFEST_VERSION: u32 = 2;
@@ -16,7 +17,9 @@ impl Manifest {
     pub fn save(&self, path: &Path) -> Result<()> {
         let data = bincode::serialize(self)
             .map_err(|e| RmrfError::Msg(format!("manifest serialize: {e}")))?;
-        fs::write(path, data)?;
+        let mut file = fs::File::create(path)?;
+        file.write_all(&data)?;
+        file.sync_all()?;
         Ok(())
     }
 

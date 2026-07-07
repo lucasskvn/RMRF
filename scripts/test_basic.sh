@@ -30,9 +30,8 @@ STORE="$TEST_DIR/store"
 echo "Hello RMRF - integration test" > "$INPUT"
 $RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
-OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
-if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
+$RMRF -- restore "$MANIFEST" -s "$STORE" -o "$RESTORED" > /dev/null 2>&1
+if diff "$INPUT" "$RESTORED" > /dev/null 2>&1; then
     pass_msg "Simple text file: backup + restore bit-identical"
 else
     fail_msg "Simple text file: diff mismatch"
@@ -56,9 +55,8 @@ rm -rf "$TEST_DIR"/*
 printf "A" > "$INPUT"
 $RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
-OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
-if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
+$RMRF -- restore "$MANIFEST" -s "$STORE" -o "$RESTORED" > /dev/null 2>&1
+if diff "$INPUT" "$RESTORED" > /dev/null 2>&1; then
     pass_msg "Single byte file: backup + restore bit-identical"
 else
     fail_msg "Single byte file: diff mismatch"
@@ -69,9 +67,8 @@ rm -rf "$TEST_DIR"/*
 dd if=/dev/zero of="$INPUT" bs=1024 count=1 2>/dev/null
 $RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
-OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
-if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
+$RMRF -- restore "$MANIFEST" -s "$STORE" -o "$RESTORED" > /dev/null 2>&1
+if diff "$INPUT" "$RESTORED" > /dev/null 2>&1; then
     pass_msg "Null bytes (1KB): backup + restore bit-identical"
 else
     fail_msg "Null bytes (1KB): diff mismatch"
@@ -82,9 +79,8 @@ rm -rf "$TEST_DIR"/*
 python3 -c "print('AB' * 5000)" > "$INPUT" 2>/dev/null || printf 'AB%.0s' {1..5000} > "$INPUT"
 $RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
-OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
-if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
+$RMRF -- restore "$MANIFEST" -s "$STORE" -o "$RESTORED" > /dev/null 2>&1
+if diff "$INPUT" "$RESTORED" > /dev/null 2>&1; then
     pass_msg "Repeated pattern: backup + restore bit-identical"
 else
     fail_msg "Repeated pattern: diff mismatch"
@@ -95,9 +91,8 @@ rm -rf "$TEST_DIR"/*
 dd if=/dev/urandom of="$INPUT" bs=1024 count=1024 2>/dev/null
 $RMRF -- backup "$INPUT" -s "$STORE" > /dev/null
 MANIFEST=$(ls "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
-OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
-if diff "$INPUT" "$OUTPUT" > /dev/null 2>&1; then
+$RMRF -- restore "$MANIFEST" -s "$STORE" -o "$RESTORED" > /dev/null 2>&1
+if diff "$INPUT" "$RESTORED" > /dev/null 2>&1; then
     pass_msg "Large file (1 MB random): backup + restore bit-identical"
 else
     fail_msg "Large file (1 MB random): diff mismatch"

@@ -27,16 +27,18 @@ STORE="$TEST_DIR/store"
 do_test() {
     local desc="$1"
     local input="$2"
+    local restored="${input}.restored"
     $RMRF -- backup "$input" -s "$STORE" > /dev/null
     MANIFEST=$(ls -t "$STORE/manifests/"*.bincode | head -1)
-    $RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
-    OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
-    if diff "$input" "$OUTPUT" > /dev/null 2>&1; then
+    rm -f "$restored"
+    $RMRF -- restore "$MANIFEST" -s "$STORE" -o "$restored" > /dev/null 2>&1
+    if diff "$input" "$restored" > /dev/null 2>&1; then
         pass_msg "$desc: bit-identical"
     else
         fail_msg "$desc: diff mismatch"
     fi
-    rm -rf "${STORE:?}/"*
+    rm -rf "${STORE:?}/"
+    mkdir -p "$STORE"
 }
 
 # Test 1: Empty file
@@ -64,14 +66,15 @@ do_test "All 0xFF bytes (1 KB)" "$TEST_DIR/ff_bytes"
 echo "unicode content" > "$TEST_DIR/écoß测试.txt"
 $RMRF -- backup "$TEST_DIR/écoß测试.txt" -s "$STORE" > /dev/null
 MANIFEST=$(ls -t "$STORE/manifests/"*.bincode | head -1)
-$RMRF -- restore "$MANIFEST" -s "$STORE" > /dev/null 2>&1
-OUTPUT=$(echo "$MANIFEST" | xargs basename | sed 's/^[^-]*-//; s/\.bincode$//')
-if diff "$TEST_DIR/écoß测试.txt" "$OUTPUT" > /dev/null 2>&1; then
+rm -f "$TEST_DIR/écoß测试.txt.restored"
+$RMRF -- restore "$MANIFEST" -s "$STORE" -o "$TEST_DIR/écoß测试.txt.restored" > /dev/null 2>&1
+if diff "$TEST_DIR/écoß测试.txt" "$TEST_DIR/écoß测试.txt.restored" > /dev/null 2>&1; then
     pass_msg "Unicode filename: bit-identical"
 else
     fail_msg "Unicode filename: diff mismatch"
 fi
-rm -rf "${STORE:?}/"*
+rm -rf "${STORE:?}/"
+mkdir -p "$STORE"
 
 # Test 7: 8 KB (exact chunk size)
 dd if=/dev/urandom of="$TEST_DIR/exact_chunk" bs=8192 count=1 2>/dev/null
