@@ -36,7 +36,7 @@ impl QmpClient {
         Ok(client)
     }
 
-    fn execute(&mut self, cmd: &str, args: serde_json::Value) -> Result<serde_json::Value> {
+    fn send_request(&mut self, cmd: &str, args: serde_json::Value) -> Result<()> {
         let request = serde_json::json!({
             "execute": cmd,
             "arguments": args,
@@ -52,6 +52,10 @@ impl QmpClient {
             .get_mut()
             .flush()
             .map_err(|e| RmrfError::Msg(format!("QMP flush: {e}")))?;
+        Ok(())
+    }
+
+    fn read_response(&mut self) -> Result<serde_json::Value> {
         loop {
             let mut line = String::new();
             self.stream
@@ -70,6 +74,11 @@ impl QmpClient {
             }
             return Ok(val);
         }
+    }
+
+    fn execute(&mut self, cmd: &str, args: serde_json::Value) -> Result<serde_json::Value> {
+        self.send_request(cmd, args)?;
+        self.read_response()
     }
 
     pub fn create_snapshot(

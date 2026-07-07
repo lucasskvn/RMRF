@@ -100,19 +100,13 @@ impl Drop for DaemonGuard {
     }
 }
 
-fn run_job(job: &Job, cfg: &RmrfConfig) -> bool {
-    let store = &cfg.store;
-    let _lock = DAEMON_LOCK.lock().unwrap();
-
-    log_msg(&format!("JOB {}: starting", job.name));
-
-    let start = chrono::Utc::now();
-
-    let mut cmd = process::Command::new(std::env::current_exe().unwrap_or_else(|_| "rmrf".into()));
+fn build_backup_command(job: &Job, store: &Path) -> process::Command {
+    let mut cmd = process::Command::new(
+        std::env::current_exe().unwrap_or_else(|_| "rmrf".into()),
+    );
     cmd.arg("backup");
     cmd.arg("-s");
     cmd.arg(store);
-
     if let Some(path) = &job.path {
         cmd.arg(path);
     }
@@ -135,28 +129,73 @@ fn run_job(job: &Job, cfg: &RmrfConfig) -> bool {
     if job.live {
         cmd.arg("--live");
     }
+    cmd
+}
 
-    let output = cmd.output();
-    match output {
-        Ok(out) => {
-            let elapsed = (chrono::Utc::now() - start).num_seconds();
-            if out.status.success() {
-                log_msg(&format!("JOB {}: success ({}s)", job.name, elapsed));
-                true
-            } else {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                log_msg(&format!(
-                    "JOB {}: FAILED ({}s): {}",
-                    job.name,
-                    elapsed,
-                    stderr.lines().next().unwrap_or("unknown error")
-                ));
-                false
+fn execute_backup(
+    cmd: &mut process::Command,
+    job_name: &str,
+    started: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            log_msg(&format!("JOB {job_name}: FAILED to launch: {e}"));
+            return false;
+        }
+    };
+    let elapsed = (chrono::Utc::now() - started).num_seconds();
+    if output.status.success() {
+        log_msg(&format!("JOB {job_name}: success ({elapsed}s)"));
+        true
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        log_msg(&format!(
+            "JOB {job_name}: FAILED ({elapsed}s): {}",
+            stderr.lines().next().unwrap_or("unknown error")
+        ));
+        false
+    }
+}
+
+fn run_job(job: &Job, cfg: &RmrfConfig) -> bool {
+    let _lock = match DAEMON_LOCK.lock() {
+        Ok(g) => g,
+        Err(e) => {
+            log_msg(&format!("JOB {}: failed to acquire lock: {e}", job.name));
+            return false;
+        }
+    };
+    log_msg(&format!("JOB {}: starting", job.name));
+    let started = chrono::Utc::now();
+    let mut cmd = build_backup_command(job, &cfg.store);
+    execute_backup(&mut cmd, &job.name, started)
+}
+
+fn compute_next_run<'a>(jobs: &'a [&'a Job]) -> Option<(chrono::DateTime<chrono::Utc>, &'a Job)> {
+    let mut next_run: Option<(chrono::DateTime<chrono::Utc>, &Job)> = None;
+    for job in jobs {
+        if let Ok(schedule) = crate::config::parse_cron_schedule(&job.schedule) {
+            if let Some(next) = schedule.upcoming(chrono::Utc).next() {
+                match next_run {
+                    Some((t, _)) if next < t => next_run = Some((next, job)),
+                    None => next_run = Some((next, job)),
+                    _ => {}
+                }
             }
         }
-        Err(e) => {
-            log_msg(&format!("JOB {}: FAILED to launch: {e}", job.name));
-            false
+    }
+    next_run
+}
+
+fn execute_due_jobs(jobs: &[&Job], cfg: &RmrfConfig) {
+    for job in jobs {
+        if let Ok(schedule) = crate::config::parse_cron_schedule(&job.schedule) {
+            if let Some(next) = schedule.upcoming(chrono::Utc).next() {
+                if (next - chrono::Utc::now()).num_seconds().abs() < 5 {
+                    run_job(job, cfg);
+                }
+            }
         }
     }
 }
@@ -189,21 +228,7 @@ pub fn run_daemon(once: bool, job_name: Option<&str>, cfg: &RmrfConfig) -> bool 
 
     loop {
         let now = chrono::Utc::now();
-        let mut next_run: Option<(chrono::DateTime<chrono::Utc>, &Job)> = None;
-
-        for job in &jobs {
-            if let Ok(schedule) = crate::config::parse_cron_schedule(&job.schedule) {
-                if let Some(next) = schedule.upcoming(chrono::Utc).next() {
-                    match next_run {
-                        Some((t, _)) if next < t => next_run = Some((next, job)),
-                        None => next_run = Some((next, job)),
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        if let Some((next, _)) = next_run {
+        if let Some((next, _)) = compute_next_run(&jobs) {
             let sleep_secs = (next - now).num_seconds().max(1) as u64;
             log_msg(&format!(
                 "Next job at {}, sleeping {}s",
@@ -211,16 +236,7 @@ pub fn run_daemon(once: bool, job_name: Option<&str>, cfg: &RmrfConfig) -> bool 
                 sleep_secs
             ));
             std::thread::sleep(Duration::from_secs(sleep_secs.min(3600)));
-
-            for job in &jobs {
-                if let Ok(schedule) = crate::config::parse_cron_schedule(&job.schedule) {
-                    if let Some(next) = schedule.upcoming(chrono::Utc).next() {
-                        if (next - chrono::Utc::now()).num_seconds().abs() < 5 {
-                            run_job(job, cfg);
-                        }
-                    }
-                }
-            }
+            execute_due_jobs(&jobs, cfg);
         } else {
             log_msg("No upcoming jobs, sleeping 1h");
             std::thread::sleep(Duration::from_secs(3600));
