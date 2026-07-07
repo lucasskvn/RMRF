@@ -1,5 +1,6 @@
 mod backup;
 mod commands;
+mod config;
 mod disk_detect;
 mod hypervisor;
 mod lock;
@@ -7,12 +8,11 @@ mod pipeline;
 mod restore;
 
 use clap::{Parser, Subcommand};
+use config::RmrfConfig;
 use disk_detect::{parse_disk_format, DiskFormatArg};
 use hypervisor::Hypervisor;
 use lock::{check_stale_sentinels, store_sentinel_path, try_lock_store, unlock_store};
 use std::path::PathBuf;
-
-const DEFAULT_STORE: &str = "./rmrf-store";
 
 #[derive(Parser)]
 #[command(
@@ -24,6 +24,8 @@ const DEFAULT_STORE: &str = "./rmrf-store";
         (Proxmox QEMU/LXC, Libvirt)."
 )]
 struct Cli {
+    #[arg(long, help = "Path to config file (default: ~/.rmrf.toml)")]
+    config: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -32,8 +34,8 @@ struct Cli {
 enum Command {
     Backup {
         path: Option<PathBuf>,
-        #[arg(short, long, default_value = DEFAULT_STORE)]
-        store: PathBuf,
+        #[arg(short, long)]
+        store: Option<PathBuf>,
         #[arg(long)]
         retain: Option<u64>,
         #[arg(long)]
@@ -51,30 +53,30 @@ enum Command {
     },
     Restore {
         manifest: PathBuf,
-        #[arg(short, long, default_value = DEFAULT_STORE)]
-        store: PathBuf,
+        #[arg(short, long)]
+        store: Option<PathBuf>,
         #[arg(short, long)]
         output: Option<PathBuf>,
         #[arg(long)]
         force: bool,
     },
     List {
-        #[arg(short, long, default_value = DEFAULT_STORE)]
-        store: PathBuf,
+        #[arg(short, long)]
+        store: Option<PathBuf>,
     },
     Info {
         manifest: PathBuf,
-        #[arg(short, long, default_value = DEFAULT_STORE)]
-        store: PathBuf,
+        #[arg(short, long)]
+        store: Option<PathBuf>,
     },
     Verify {
         manifest: PathBuf,
-        #[arg(short, long, default_value = DEFAULT_STORE)]
-        store: PathBuf,
+        #[arg(short, long)]
+        store: Option<PathBuf>,
     },
     Gc {
-        #[arg(short, long, default_value = DEFAULT_STORE)]
-        store: PathBuf,
+        #[arg(short, long)]
+        store: Option<PathBuf>,
         #[arg(long)]
         dry_run: bool,
     },
@@ -82,23 +84,28 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
+    let cfg = cli.config.as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok()
+            .and_then(|s| toml::from_str(&s).ok()))
+        .unwrap_or_else(config::load_config);
+
     let store = match &cli.command {
-        Command::Backup { store, .. } => store,
-        Command::Restore { store, .. } => store,
-        Command::List { store } => store,
-        Command::Info { store, .. } => store,
-        Command::Verify { store, .. } => store,
-        Command::Gc { store, .. } => store,
+        Command::Backup { store, .. } => store.as_deref().unwrap_or(&cfg.store),
+        Command::Restore { store, .. } => store.as_deref().unwrap_or(&cfg.store),
+        Command::List { store } => store.as_deref().unwrap_or(&cfg.store),
+        Command::Info { store, .. } => store.as_deref().unwrap_or(&cfg.store),
+        Command::Verify { store, .. } => store.as_deref().unwrap_or(&cfg.store),
+        Command::Gc { store, .. } => store.as_deref().unwrap_or(&cfg.store),
     };
     check_stale_sentinels(store);
 
-    let ok = dispatch_command(cli.command);
+    let ok = dispatch_command(cli.command, &cfg);
     if !ok {
         std::process::exit(1);
     }
 }
 
-fn dispatch_command(command: Command) -> bool {
+fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
     match command {
         Command::Backup {
             path,
@@ -112,7 +119,7 @@ fn dispatch_command(command: Command) -> bool {
             hypervisor,
         } => handle_backup(
             path.as_deref(),
-            &store,
+            store.as_deref().unwrap_or(&cfg.store),
             retain,
             vm,
             disk.as_deref(),
@@ -120,22 +127,24 @@ fn dispatch_command(command: Command) -> bool {
             format,
             no_suspend,
             hypervisor,
+            cfg,
         ),
         Command::Restore {
             manifest,
             store,
             output,
             force,
-        } => restore::restore(&manifest, &store, output.as_deref(), force),
-        Command::List { store } => commands::list(&store),
-        Command::Info { manifest, store } => commands::info(&manifest, &store),
-        Command::Verify { manifest, store } => commands::verify(&manifest, &store),
+        } => restore::restore(&manifest, store.as_deref().unwrap_or(&cfg.store), output.as_deref(), force),
+        Command::List { store } => commands::list(store.as_deref().unwrap_or(&cfg.store)),
+        Command::Info { manifest, store } => commands::info(&manifest, store.as_deref().unwrap_or(&cfg.store)),
+        Command::Verify { manifest, store } => commands::verify(&manifest, store.as_deref().unwrap_or(&cfg.store)),
         Command::Gc { store, dry_run } => {
-            if !try_lock_store(&store) {
+            let store = store.as_deref().unwrap_or(&cfg.store);
+            if !try_lock_store(store) {
                 false
             } else {
-                let ok = commands::gc(&store, dry_run);
-                unlock_store(&store);
+                let ok = commands::gc(store, dry_run);
+                unlock_store(store);
                 ok
             }
         }
@@ -153,6 +162,7 @@ fn handle_backup(
     format: DiskFormatArg,
     no_suspend: bool,
     hypervisor: Hypervisor,
+    cfg: &RmrfConfig,
 ) -> bool {
     let resolved_path;
     let path = match (path, &vm) {
@@ -192,11 +202,11 @@ fn handle_backup(
             .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
         let sentinel = store_sentinel_path(store, vm_id);
         std::fs::write(&sentinel, chrono::Utc::now().to_rfc3339()).ok();
-        let result = backup::backup_vm(path, store, vm_id, disk_label, disk_format, lifecycle);
+        let result = backup::backup_vm(path, store, vm_id, disk_label, disk_format, lifecycle, cfg);
         std::fs::remove_file(&sentinel).ok();
         result
     } else {
-        backup::backup(path, store)
+        backup::backup(path, store, cfg)
     };
 
     if !ok {

@@ -1,3 +1,4 @@
+use crate::config::RmrfConfig;
 use fastcdc::v2016::StreamCDC;
 use indicatif::{ProgressBar, ProgressStyle};
 use rmrf_core::{ChunkStore, DedupIndex, Source, SourceMetadata};
@@ -30,6 +31,7 @@ pub fn run_chunk_pipeline(
     store_dir: &Path,
     timestamp: &str,
     label: &str,
+    cfg: &RmrfConfig,
 ) -> BackupStats {
     println!("Source size: {} bytes", metadata.size);
 
@@ -46,7 +48,7 @@ pub fn run_chunk_pipeline(
         }
     };
 
-    let mut chunk_store = CompressedChunkStore::new(local_store);
+    let mut chunk_store = CompressedChunkStore::with_level(local_store, cfg.compression_level);
     let index_path = store_dir.join("index.bincode");
     let mut dedup_index = match PersistentDedupIndex::new(index_path) {
         Ok(idx) => idx,
@@ -64,9 +66,11 @@ pub fn run_chunk_pipeline(
         metadata,
         timestamp,
         label,
+        cfg,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_chunk_loop(
     source: &mut dyn Source,
     chunk_store: &mut CompressedChunkStore<LocalChunkStore>,
@@ -75,8 +79,9 @@ fn run_chunk_loop(
     metadata: SourceMetadata,
     timestamp: &str,
     label: &str,
+    cfg: &RmrfConfig,
 ) -> BackupStats {
-    let chunker = StreamCDC::new(source, 4096, 16384, 65536);
+    let chunker = StreamCDC::new(source, cfg.cdc_min, cfg.cdc_avg, cfg.cdc_max);
     let mut chunk_hashes = Vec::new();
     let mut chunk_count = 0u64;
     let mut total_bytes = 0u64;

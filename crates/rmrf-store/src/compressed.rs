@@ -17,6 +17,13 @@ impl<S: ChunkStore> CompressedChunkStore<S> {
         }
     }
 
+    pub fn with_level(inner: S, level: i32) -> Self {
+        CompressedChunkStore {
+            inner,
+            compression_level: level,
+        }
+    }
+
     fn compress(&self, data: &[u8]) -> RmrfResult<Vec<u8>> {
         let mut encoder = Encoder::new(Vec::new(), self.compression_level)
             .map_err(|e| RmrfError::Msg(format!("Compression error: {e}")))?;
