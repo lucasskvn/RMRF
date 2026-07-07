@@ -59,15 +59,7 @@ fn backup_dir(dir: &Path, store_dir: &Path) -> bool {
     };
 
     println!("Found {} files", files.len());
-    let mut stats = DirStats::default();
-    let mut errors = 0u64;
-    for path in &files {
-        let rel = compute_rel_label(path, dir);
-        match backup_file(path, store_dir, &timestamp, &rel) {
-            Some(s) => stats.add(s),
-            None => errors += 1,
-        }
-    }
+    let (stats, errors) = backup_all_files(&files, dir, store_dir, &timestamp);
     if errors > 0 {
         eprintln!("Warning: {errors} file(s) failed to backup");
     }
@@ -75,6 +67,24 @@ fn backup_dir(dir: &Path, store_dir: &Path) -> bool {
     println!("Directory backup complete!");
     print_dir_summary(stats.files, stats.chunks, stats.bytes, stats.skipped);
     true
+}
+
+fn backup_all_files(
+    files: &[std::path::PathBuf],
+    dir: &Path,
+    store_dir: &Path,
+    timestamp: &str,
+) -> (DirStats, u64) {
+    let mut stats = DirStats::default();
+    let mut errors = 0u64;
+    for path in files {
+        let rel = compute_rel_label(path, dir);
+        match backup_file(path, store_dir, timestamp, &rel) {
+            Some(s) => stats.add(s),
+            None => errors += 1,
+        }
+    }
+    (stats, errors)
 }
 
 fn print_dir_summary(files: u64, chunks: u64, bytes: u64, skipped: u64) {

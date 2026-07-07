@@ -75,45 +75,53 @@ fn find_disk_from_config(
     prefixes: &[&str],
     disk_spec: Option<&str>,
 ) -> Result<Option<(PathBuf, String)>, String> {
-    let mut candidates: Vec<(&str, &str)> = Vec::new();
-    for line in config.lines() {
-        let line = line.trim();
-        let Some((prefix, rest)) = line.split_once(':') else {
-            continue;
-        };
-        let prefix = prefix.trim();
-        if !prefixes.iter().any(|p| prefix.starts_with(p)) {
-            continue;
-        }
-        if let Some(spec) = disk_spec {
-            if prefix != spec {
-                continue;
-            }
-            let rest = rest.trim();
-            let volume = rest.split(',').next().unwrap_or(rest).trim();
-            if volume.is_empty() || volume == "none" {
-                continue;
-            }
-            return resolve_pvesm_path(volume);
-        }
-        let rest = rest.trim();
-        let volume = rest.split(',').next().unwrap_or(rest).trim();
-        if volume.is_empty() || volume == "none" {
-            continue;
-        }
-        candidates.push((prefix, volume));
+    if let Some(spec) = disk_spec {
+        return find_specific_disk(config, prefixes, spec);
     }
+    let candidates = collect_disk_candidates(config, prefixes);
     if candidates.is_empty() {
         return Ok(None);
     }
-    candidates.sort_by_key(|(name, _)| {
-        if name.starts_with("efidisk") || name.starts_with("tpmstate") {
-            1
-        } else {
-            0
-        }
-    });
-    resolve_pvesm_path(candidates[0].1)
+    let best = candidates.into_iter()
+        .min_by_key(|(name, _)| {
+            if name.starts_with("efidisk") || name.starts_with("tpmstate") { 1 } else { 0 }
+        });
+    resolve_pvesm_path(best.unwrap().1)
+}
+
+fn find_specific_disk(
+    config: &str,
+    prefixes: &[&str],
+    disk_spec: &str,
+) -> Result<Option<(PathBuf, String)>, String> {
+    for line in config.lines() {
+        let line = line.trim();
+        let Some((prefix, rest)) = line.split_once(':') else { continue; };
+        let prefix = prefix.trim();
+        if !prefixes.iter().any(|p| prefix.starts_with(p)) { continue; }
+        if prefix != disk_spec { continue; }
+        let volume = rest.trim().split(',').next().unwrap_or(rest).trim();
+        if volume.is_empty() || volume == "none" { continue; }
+        return resolve_pvesm_path(volume);
+    }
+    Ok(None)
+}
+
+fn collect_disk_candidates<'a>(
+    config: &'a str,
+    prefixes: &[&str],
+) -> Vec<(&'a str, &'a str)> {
+    let mut candidates = Vec::new();
+    for line in config.lines() {
+        let line = line.trim();
+        let Some((prefix, rest)) = line.split_once(':') else { continue; };
+        let prefix = prefix.trim();
+        if !prefixes.iter().any(|p| prefix.starts_with(p)) { continue; }
+        let volume = rest.trim().split(',').next().unwrap_or(rest).trim();
+        if volume.is_empty() || volume == "none" { continue; }
+        candidates.push((prefix, volume));
+    }
+    candidates
 }
 
 fn resolve_pvesm_path(volume: &str) -> Result<Option<(PathBuf, String)>, String> {

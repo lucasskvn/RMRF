@@ -8,38 +8,54 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, force: bool) -> bool {
-    println!("Restore: {}", manifest_path.display());
+struct RestoreCtx {
+    manifest: Manifest,
+    output_path: std::path::PathBuf,
+    chunk_store: CompressedChunkStore<LocalChunkStore>,
+}
 
+fn prepare_restore(
+    manifest_path: &Path,
+    store_dir: &Path,
+    output: Option<&Path>,
+    force: bool,
+) -> Option<RestoreCtx> {
     let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("Error loading manifest: {e}");
-            return false;
+            return None;
         }
     };
-
     let output_path = resolve_output_path_or_default(output, manifest_path);
-
     if !check_overwrite(&output_path, force) {
-        return false;
+        return None;
     }
-
     let chunk_store = match open_chunk_store(store_dir) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error opening chunk store: {e}");
-            return false;
+            return None;
         }
     };
+    Some(RestoreCtx { manifest, output_path, chunk_store })
+}
 
-    if is_empty_manifest(&manifest, &output_path) {
+pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, force: bool) -> bool {
+    println!("Restore: {}", manifest_path.display());
+
+    let ctx = match prepare_restore(manifest_path, store_dir, output, force) {
+        Some(c) => c,
+        None => return false,
+    };
+
+    if is_empty_manifest(&ctx.manifest, &ctx.output_path) {
         return true;
     }
 
-    match restore_file(&manifest, &chunk_store, &output_path) {
+    match restore_file(&ctx.manifest, &ctx.chunk_store, &ctx.output_path) {
         Ok(_) => {
-            println!("Restore complete: {}", output_path.display());
+            println!("Restore complete: {}", ctx.output_path.display());
             true
         }
         Err(e) => {
