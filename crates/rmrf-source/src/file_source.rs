@@ -40,9 +40,10 @@ fn block_device_size(path: &Path) -> io::Result<u64> {
         return Err(io::Error::other(format!("blockdev --getsize64: {stderr}")));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.trim().parse::<u64>().map_err(|e| {
-        io::Error::other(format!("blockdev parse: {e}"))
-    })
+    stdout
+        .trim()
+        .parse::<u64>()
+        .map_err(|e| io::Error::other(format!("blockdev parse: {e}")))
 }
 
 impl io::Read for FileSource {

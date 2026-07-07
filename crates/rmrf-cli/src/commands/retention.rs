@@ -53,9 +53,6 @@ fn remove_old_manifests(
         }
         let basename = path.file_name().unwrap_or_default().to_string_lossy();
         let ts_str = basename.split('-').next().unwrap_or("");
-        // A manifest whose name does not encode a valid timestamp was not
-        // written by this tool's normal pipeline. Skip it rather than
-        // treating it as "epoch 0" (ancient) and deleting it.
         let Some(ts) = parse_timestamp(ts_str) else {
             eprintln!(
                 "Warning: skipping manifest with unparseable timestamp in name: {}",

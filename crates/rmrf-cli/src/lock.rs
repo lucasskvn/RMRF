@@ -4,13 +4,6 @@ use std::path::Path;
 
 const STORE_LOCK: &str = ".rmrf.lock";
 
-/// Try to acquire the store lock atomically.
-///
-/// Uses `O_CREAT | O_EXCL` so that lock creation is a single atomic step: two
-/// processes racing for the lock cannot both succeed. A pre-existing lock is
-/// only treated as stale (and reclaimed) when its PID is no longer alive,
-/// which is checked *before* the reclaim to avoid resurrecting a lock another
-/// process just legitimately acquired.
 pub fn try_lock_store(store: &Path) -> bool {
     if let Err(e) = std::fs::create_dir_all(store) {
         eprintln!("Error: cannot create store directory: {e}");
@@ -19,14 +12,11 @@ pub fn try_lock_store(store: &Path) -> bool {
     let lock_path = store.join(STORE_LOCK);
 
     if let Err(e) = try_create_lock(&lock_path) {
-        // Lock exists — it may be stale (holder crashed). Check liveness and
-        // reclaim only if the holder is dead.
         match e.kind() {
             std::io::ErrorKind::AlreadyExists => {
                 if !lock_is_stale(&lock_path) {
                     return false;
                 }
-                // Stale: remove and retry once. Another racer may grab it first.
                 let _ = std::fs::remove_file(&lock_path);
                 if let Err(e) = try_create_lock(&lock_path) {
                     eprintln!("Error: cannot acquire store lock: {e}");
@@ -126,8 +116,6 @@ mod tests {
     #[test]
     fn stale_lock_with_dead_pid_is_reclaimed() {
         let store = TempDir::new().unwrap();
-        // Write a lock pointing at a PID that is extremely unlikely to exist,
-        // simulating a crashed previous holder.
         let lock = store.path().join(".rmrf.lock");
         std::fs::write(&lock, "4194303").unwrap();
         assert!(

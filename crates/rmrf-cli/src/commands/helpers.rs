@@ -21,16 +21,11 @@ pub fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// Parse a manifest timestamp of the form `YYYYMMDDTHHMMSS[Z]` into a Unix
-/// epoch second count. Returns `None` if the string is not a valid timestamp
-/// rather than silently substituting defaults — callers must decide how to
-/// handle names that do not encode a real timestamp.
 pub fn parse_timestamp(s: &str) -> Option<i64> {
     if s.len() < 15 {
         return None;
     }
     let bytes = s.as_bytes();
-    // index 8 is the 'T' separator between date and time.
     if bytes[8] != b'T' {
         return None;
     }
@@ -62,7 +57,6 @@ mod tests {
 
     #[test]
     fn parses_real_manifest_timestamp() {
-        // Format produced by the pipeline: YYYYMMDDTHHMMSSZ
         let ts = parse_timestamp("20260707T120000Z").unwrap();
         assert!(ts > 1_700_000_000);
     }
@@ -74,7 +68,6 @@ mod tests {
         assert!(parse_timestamp("20261307T120000Z").is_none(), "month 13");
         assert!(parse_timestamp("20260732T120000Z").is_none(), "day 32");
         assert!(parse_timestamp("20260707T250000Z").is_none(), "hour 25");
-        // Missing 'T' separator:
         assert!(parse_timestamp("20260707 120000Z").is_none());
     }
 }

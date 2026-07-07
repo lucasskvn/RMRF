@@ -46,14 +46,6 @@ pub fn detect_hypervisor(vm_id: &str) -> Hypervisor {
     Hypervisor::Noop
 }
 
-/// Validate a VM/CT identifier before it flows into external commands
-/// (`qm`, `pct`, `virsh`) or sentinel file paths (`.suspended-{vm_id}`).
-///
-/// Although the external commands are invoked without a shell (so classic
-/// shell injection does not apply), a malformed id can still:
-///   - be parsed as a flag by `qm`/`pct`/`virsh` if it starts with `-`,
-///   - escape the store directory via `/` or `..` in the sentinel path,
-///   - corrupt log output with control characters / newlines.
 pub fn validate_vm_id(vm_id: &str) -> Result<(), String> {
     if vm_id.is_empty() {
         return Err("VM id is empty".into());

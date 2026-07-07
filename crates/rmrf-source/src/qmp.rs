@@ -52,9 +52,6 @@ impl QmpClient {
             .get_mut()
             .flush()
             .map_err(|e| RmrfError::Msg(format!("QMP flush: {e}")))?;
-        // QMP interleaves asynchronous event lines with responses. Skip any
-        // line that is an event until we see a response carrying "return" or
-        // "error", so we never mistake an event for our command's result.
         loop {
             let mut line = String::new();
             self.stream

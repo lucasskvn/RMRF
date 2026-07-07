@@ -128,8 +128,6 @@ fn walk_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, io::Error> {
             continue;
         }
         let path = entry.path();
-        // Do not skip dotfiles: a directory backup must include .config/,
-        // .ssh/, .bashrc and similar, otherwise user data is silently lost.
         if ft.is_dir() {
             files.extend(walk_files(&path)?);
         } else if ft.is_file() {

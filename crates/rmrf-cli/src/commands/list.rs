@@ -10,8 +10,6 @@ pub fn list(
     before: Option<&str>,
     source_filter: Option<&str>,
 ) -> bool {
-    // Validate user-supplied filters before touching the store so a typo does
-    // not get masked by an unrelated "no backups found" result.
     let since_parsed = match since.map(parse_date_prefix).transpose() {
         Ok(v) => v,
         Err(e) => {

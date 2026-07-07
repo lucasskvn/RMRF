@@ -37,9 +37,6 @@ pub struct RmrfConfig {
 }
 
 fn default_store() -> PathBuf {
-    // Absolute default so the store resolves consistently regardless of the
-    // caller's working directory. Falls back to a relative path only if HOME
-    // is unset (e.g. restricted environments).
     std::env::var_os("HOME")
         .map(|h| PathBuf::from(h).join(".rmrf-store"))
         .unwrap_or_else(|| PathBuf::from("./rmrf-store"))
@@ -74,12 +71,6 @@ impl Default for RmrfConfig {
     }
 }
 
-/// Parse a cron schedule, accepting both 5-field (`min hour dom month dow`)
-/// and 6-field (`sec min hour dom month dow`) expressions as well as macros
-/// like `@daily`. The `cron` crate requires a leading seconds field, so a
-/// 5-field expression is normalized by prepending `0 ` — without this, the
-/// daemon would silently never run jobs configured with a standard 5-field
-/// crontab entry.
 pub fn parse_cron_schedule(schedule: &str) -> Result<cron::Schedule, String> {
     let fields: Vec<&str> = schedule.split_whitespace().collect();
     let normalized = if fields.len() == 5 {
@@ -91,9 +82,6 @@ pub fn parse_cron_schedule(schedule: &str) -> Result<cron::Schedule, String> {
         .map_err(|e| format!("invalid cron schedule {schedule:?}: {e}"))
 }
 
-/// Validate a job name. Names flow into generated crontab lines
-/// (`... daemon --once --job {name}`), so they must be free of whitespace,
-/// newlines and shell metacharacters to prevent cron-line injection.
 pub fn validate_job_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("job name is empty".into());
@@ -113,7 +101,6 @@ pub fn validate_job_name(name: &str) -> Result<(), String> {
 }
 
 impl RmrfConfig {
-    /// Validate cross-field and per-job constraints that serde cannot enforce.
     pub fn validate(&self) -> Result<(), String> {
         if !(1..=22).contains(&self.compression_level) {
             return Err(format!(
@@ -135,9 +122,6 @@ impl RmrfConfig {
     }
 }
 
-/// Load the default config from `~/.rmrf.toml`, warning (and falling back to
-/// safe defaults) if the file exists but is unparseable or invalid. A missing
-/// file is not an error.
 pub fn load_config() -> RmrfConfig {
     let Some(home) = std::env::var_os("HOME") else {
         return RmrfConfig::default();
@@ -167,10 +151,6 @@ pub fn load_config() -> RmrfConfig {
     }
 }
 
-/// Load an explicit config file passed via `--config`. Unlike
-/// [`load_config`], a malformed or invalid file is a hard error — the caller
-/// asked for this specific file, so silently substituting defaults would mask
-/// a mistake.
 pub fn load_config_file(path: &Path) -> Result<RmrfConfig, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read config {}: {e}", path.display()))?;
@@ -192,8 +172,6 @@ mod tests {
             .map(|h| PathBuf::from(h).join(".rmrf-store"))
             .unwrap_or_else(|| PathBuf::from("./rmrf-store"));
         assert_eq!(cfg.store, expected_store);
-        // The default must be absolute when HOME is available, so the store
-        // does not drift with the caller's working directory.
         if std::env::var_os("HOME").is_some() {
             assert!(cfg.store.is_absolute(), "default store should be absolute");
         }
@@ -274,8 +252,6 @@ mod tests {
 
     #[test]
     fn parse_cron_schedule_accepts_five_and_six_fields() {
-        // 5-field crontab (the common form) must work — cron 0.12 requires a
-        // leading seconds field, so the helper normalizes it.
         assert!(parse_cron_schedule("0 3 * * *").is_ok());
         assert!(parse_cron_schedule("0 0 3 * * *").is_ok());
         assert!(parse_cron_schedule("@daily").is_ok());

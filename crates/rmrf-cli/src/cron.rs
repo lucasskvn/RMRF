@@ -7,10 +7,6 @@ pub fn generate_crontab(jobs: &[Job], binary: &Path) -> String {
     }
     let mut out = String::from("# RMRF scheduled jobs\n");
     for job in jobs {
-        // Defense in depth: a job name containing whitespace, newlines or
-        // shell metacharacters could inject extra lines/commands into the
-        // installed crontab. Config validation rejects these, but skip them
-        // here too so a programmatic caller cannot bypass it.
         if let Err(e) = validate_job_name(&job.name) {
             out.push_str(&format!("# WARNING: skipping job with unsafe name: {e}\n"));
             continue;

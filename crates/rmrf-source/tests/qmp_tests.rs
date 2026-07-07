@@ -96,8 +96,6 @@ fn qmp_create_snapshot() {
 fn qmp_skips_async_event_lines_before_response() {
     let dir = tempfile::TempDir::new().unwrap();
     let socket = dir.path().join("event.sock");
-    // For blockdev-snapshot-sync the server emits an asynchronous event line
-    // followed by the actual return value in a single write.
     let event_then_return = "{\"event\":{\"event\":\"BLOCK_JOB_COMPLETED\"}}\n{\"return\":{}}\n";
     let rx = mock_qmp_server(
         &socket,
@@ -111,7 +109,6 @@ fn qmp_skips_async_event_lines_before_response() {
     let mut client = QmpClient::connect(&socket).unwrap();
     let _ = rx.recv_timeout(Duration::from_secs(2));
     let snap = dir.path().join("snap.qcow2");
-    // Must succeed: the event line must be skipped, not mistaken for the result.
     client
         .create_snapshot("drive-virtio-disk0", &snap, "qcow2")
         .unwrap();

@@ -31,11 +31,7 @@ fn log_msg(msg: &str) {
     eprint!("{line}");
 }
 
-/// Returns true if the PID in the lock file is a live process.
 fn pid_alive(pid: u32) -> bool {
-    // `kill -0 <pid>` exits 0 iff the process exists and is signalable.
-    // We must check `.success()`, not `.is_ok()` — the latter only reports
-    // whether `kill` could be spawned, so a dead PID would read as "alive".
     process::Command::new("kill")
         .args(["-0", &pid.to_string()])
         .status()
@@ -62,7 +58,6 @@ fn try_lock_daemon() -> bool {
     if write_lock(&lock_path) {
         return true;
     }
-    // Lock exists — only legitimate if its holder is alive.
     if let Ok(pid_str) = fs::read_to_string(&lock_path) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
             if pid_alive(pid) {
@@ -78,8 +73,6 @@ fn try_lock_daemon() -> bool {
     write_lock(&lock_path)
 }
 
-/// RAII guard that releases the daemon lock on drop, so an early return or
-/// panic cannot orphan the lock.
 struct DaemonGuard {
     lock_path: PathBuf,
     active: bool,

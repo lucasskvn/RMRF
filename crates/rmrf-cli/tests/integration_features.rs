@@ -20,19 +20,42 @@ fn backup_with_config_file() {
     let src = work.path().join("data.bin");
     std::fs::write(&src, b"config test data").unwrap();
 
-    let cfg = write_config(cfg_dir.path(), &format!(
-        "store = \"{}\"\ncompression_level = 3\n",
-        store.path().display()
-    ));
+    let cfg = write_config(
+        cfg_dir.path(),
+        &format!(
+            "store = \"{}\"\ncompression_level = 3\n",
+            store.path().display()
+        ),
+    );
 
-    rmrf().args(["--config", cfg.to_str().unwrap(), "backup", src.to_str().unwrap()])
-        .assert().success();
+    rmrf()
+        .args([
+            "--config",
+            cfg.to_str().unwrap(),
+            "backup",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 
-    let manifest = std::fs::read_dir(store.path().join("manifests")).unwrap()
-        .next().unwrap().unwrap().path();
+    let manifest = std::fs::read_dir(store.path().join("manifests"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let out = work.path().join("restored");
-    rmrf().args(["--config", cfg.to_str().unwrap(), "restore", manifest.to_str().unwrap(), "-o", out.to_str().unwrap()])
-        .assert().success();
+    rmrf()
+        .args([
+            "--config",
+            cfg.to_str().unwrap(),
+            "restore",
+            manifest.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 
     assert_eq!(std::fs::read(&src).unwrap(), std::fs::read(&out).unwrap());
 }
@@ -44,13 +67,32 @@ fn verify_rehash_passes() {
     let src = work.path().join("rehash_test.bin");
     std::fs::write(&src, b"data for rehash verification").unwrap();
 
-    rmrf().args(["backup", src.to_str().unwrap(), "-s", store.path().to_str().unwrap()])
-        .assert().success();
+    rmrf()
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 
-    let manifest = std::fs::read_dir(store.path().join("manifests")).unwrap()
-        .next().unwrap().unwrap().path();
-    rmrf().args(["verify", manifest.to_str().unwrap(), "-s", store.path().to_str().unwrap(), "--rehash"])
-        .assert().success()
+    let manifest = std::fs::read_dir(store.path().join("manifests"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    rmrf()
+        .args([
+            "verify",
+            manifest.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+            "--rehash",
+        ])
+        .assert()
+        .success()
         .stdout(predicate::str::contains("re-hashed"));
 }
 
@@ -61,15 +103,38 @@ fn list_with_since_filter() {
     let src = work.path().join("filter_test.bin");
     std::fs::write(&src, b"filter test").unwrap();
 
-    rmrf().args(["backup", src.to_str().unwrap(), "-s", store.path().to_str().unwrap()])
-        .assert().success();
+    rmrf()
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 
-    rmrf().args(["list", "-s", store.path().to_str().unwrap(), "--since", "20200101"])
-        .assert().success()
+    rmrf()
+        .args([
+            "list",
+            "-s",
+            store.path().to_str().unwrap(),
+            "--since",
+            "20200101",
+        ])
+        .assert()
+        .success()
         .stdout(predicate::str::contains("filter_test.bin"));
 
-    rmrf().args(["list", "-s", store.path().to_str().unwrap(), "--before", "20200101"])
-        .assert().success()
+    rmrf()
+        .args([
+            "list",
+            "-s",
+            store.path().to_str().unwrap(),
+            "--before",
+            "20200101",
+        ])
+        .assert()
+        .success()
         .stdout(predicate::str::is_empty().not());
 }
 
@@ -80,11 +145,26 @@ fn list_with_source_filter() {
     let src = work.path().join("unique_name_xyz.bin");
     std::fs::write(&src, b"source filter test").unwrap();
 
-    rmrf().args(["backup", src.to_str().unwrap(), "-s", store.path().to_str().unwrap()])
-        .assert().success();
+    rmrf()
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 
-    rmrf().args(["list", "-s", store.path().to_str().unwrap(), "--source", "unique_name"])
-        .assert().success()
+    rmrf()
+        .args([
+            "list",
+            "-s",
+            store.path().to_str().unwrap(),
+            "--source",
+            "unique_name",
+        ])
+        .assert()
+        .success()
         .stdout(predicate::str::contains("unique_name_xyz.bin"));
 }
 
@@ -96,15 +176,36 @@ fn parallel_restore_with_jobs() {
     let data = vec![0xABu8; 100_000];
     std::fs::write(&src, &data).unwrap();
 
-    rmrf().args(["backup", src.to_str().unwrap(), "-s", store.path().to_str().unwrap()])
-        .assert().success();
+    rmrf()
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 
-    let manifest = std::fs::read_dir(store.path().join("manifests")).unwrap()
-        .next().unwrap().unwrap().path();
+    let manifest = std::fs::read_dir(store.path().join("manifests"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let out = work.path().join("restored_parallel");
-    rmrf().args(["restore", manifest.to_str().unwrap(), "-s", store.path().to_str().unwrap(),
-        "-o", out.to_str().unwrap(), "--jobs", "4"])
-        .assert().success();
+    rmrf()
+        .args([
+            "restore",
+            manifest.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--jobs",
+            "4",
+        ])
+        .assert()
+        .success();
 
     assert_eq!(std::fs::read(&src).unwrap(), std::fs::read(&out).unwrap());
 }
@@ -116,27 +217,41 @@ fn gc_dry_run_after_backup() {
     let src = work.path().join("gc_test.bin");
     std::fs::write(&src, b"gc test data").unwrap();
 
-    rmrf().args(["backup", src.to_str().unwrap(), "-s", store.path().to_str().unwrap()])
-        .assert().success();
+    rmrf()
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 
-    rmrf().args(["gc", "-s", store.path().to_str().unwrap(), "--dry-run"])
-        .assert().success()
+    rmrf()
+        .args(["gc", "-s", store.path().to_str().unwrap(), "--dry-run"])
+        .assert()
+        .success()
         .stdout(predicate::str::contains("would delete 0 orphan chunks"));
 }
 
 #[test]
 fn cron_command_output() {
     let cfg_dir = TempDir::new().unwrap();
-    let cfg = write_config(cfg_dir.path(), r#"
+    let cfg = write_config(
+        cfg_dir.path(),
+        r#"
         [[jobs]]
         name = "test-job"
         path = "/tmp/test"
         schedule = "0 3 * * *"
         retain = 30
-    "#);
+    "#,
+    );
 
-    rmrf().args(["--config", cfg.to_str().unwrap(), "cron"])
-        .assert().success()
+    rmrf()
+        .args(["--config", cfg.to_str().unwrap(), "cron"])
+        .assert()
+        .success()
         .stdout(predicate::str::contains("test-job"))
         .stdout(predicate::str::contains("0 3 * * *"));
 }

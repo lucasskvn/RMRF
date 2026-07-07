@@ -83,8 +83,6 @@ fn find_disk_from_config(
     if candidates.is_empty() {
         return Ok(None);
     }
-    // Only real data disks are eligible for auto-selection; EFI/TPM disks are
-    // not a VM's main disk and backing one up as such would be misleading.
     let data_candidates: Vec<_> = candidates
         .iter()
         .filter(|(name, _)| !is_auxiliary_disk(name))

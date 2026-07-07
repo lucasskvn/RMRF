@@ -1,5 +1,5 @@
-use rmrf_source::FileSource;
 use rmrf_core::Source;
+use rmrf_source::FileSource;
 use std::io::Read;
 use std::io::Write;
 

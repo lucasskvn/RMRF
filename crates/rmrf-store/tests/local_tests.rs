@@ -1,5 +1,5 @@
-use rmrf_store::{hash_data, LocalChunkStore};
 use rmrf_core::ChunkStore;
+use rmrf_store::{hash_data, LocalChunkStore};
 
 fn make_hash(val: u8) -> [u8; 32] {
     let mut h = [0u8; 32];

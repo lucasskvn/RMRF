@@ -68,11 +68,6 @@ impl VmLifecycle for LibvirtLifecycle {
     }
 }
 
-/// Live QMP-based backup is disabled: `blockdev-snapshot-sync` creates an
-/// overlay disk with no merge-back path, leaving the VM running off a /tmp
-/// overlay that depends on the original as a backing file — losing or moving
-/// either file corrupts the VM. The type is kept for API stability but every
-/// operation returns an error so it can never be reached in practice.
 #[allow(dead_code)]
 pub struct QmpLifecycle {
     socket_path: std::path::PathBuf,

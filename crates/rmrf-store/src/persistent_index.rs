@@ -1,6 +1,4 @@
-use rmrf_core::{
-    ChunkLocation, DedupIndex, Hash, IndexEntry, Result as RmrfResult, RmrfError,
-};
+use rmrf_core::{ChunkLocation, DedupIndex, Hash, IndexEntry, Result as RmrfResult, RmrfError};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;

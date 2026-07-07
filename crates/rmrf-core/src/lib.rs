@@ -83,4 +83,3 @@ pub trait DedupIndex {
     fn increment_refcount(&mut self, hash: &Hash) -> Result<()>;
     fn decrement_refcount(&mut self, hash: &Hash) -> Result<u64>;
 }
-

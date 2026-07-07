@@ -34,8 +34,6 @@ fn directory_backup_includes_dotfiles() {
         .assert()
         .success();
 
-    // Each file gets a manifest named `{timestamp}-{label}.bincode`. Dotfiles
-    // must appear (previously they were silently skipped).
     let names = manifest_names(store.path());
     assert!(
         names.iter().any(|n| n.contains(".bashrc")),
@@ -76,8 +74,6 @@ fn config_file_invalid_values_is_hard_error() {
 #[test]
 fn list_rejects_unparseable_since() {
     let store = TempDir::new().unwrap();
-    // Back up one file so the store has a manifests dir; otherwise list would
-    // fail on the missing directory before validating --since.
     let work = TempDir::new().unwrap();
     let src = work.path().join("f.txt");
     fs::write(&src, b"data").unwrap();
@@ -128,15 +124,11 @@ fn retention_preserves_malformed_name_manifests() {
         .next()
         .unwrap();
 
-    // An old, correctly-named manifest (year 2000) — eligible for deletion.
     let old_name = manifests_dir.join("20000101T000000Z-old.bincode");
     fs::copy(&real, &old_name).unwrap();
-    // A malformed-name manifest (no timestamp) — must be skipped, not deleted.
     let malformed = manifests_dir.join("manual-backup.bincode");
     fs::copy(&real, &malformed).unwrap();
 
-    // --retain 1 day: the 2000-era manifest is older than the cutoff and must
-    // be removed; the malformed-name one must be preserved.
     rmrf()
         .args([
             "backup",
