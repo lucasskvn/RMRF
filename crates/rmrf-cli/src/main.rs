@@ -104,7 +104,6 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    Clean,
 }
 
 fn main() {
@@ -141,7 +140,6 @@ fn main() {
         Command::Info { manifest, store } => commands::info(&manifest, &store),
         Command::Verify { manifest, store } => commands::verify(&manifest, &store),
         Command::Gc { store, dry_run } => commands::gc(&store, dry_run),
-        Command::Clean => commands::clean(),
     };
     if !ok {
         std::process::exit(1);
