@@ -114,7 +114,7 @@ fn print_manifest_entry(
 
     let size = format_size(manifest.source.size);
     println!(
-        "{}  {:>9}  {:>4} chunks  {}",
+        "{:19}  {:>9}  {:>6} chunks  {}",
         ts_str,
         size,
         manifest.chunks.len(),

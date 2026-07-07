@@ -242,9 +242,8 @@ fn save_manifest(
         Err(e) => eprintln!("Error saving manifest: {e}"),
     }
     println!("Backup complete!");
-    println!("Chunks: {}", stats.chunks);
+    println!("Chunks stored: {} | Dedup skipped: {}", stats.chunks - stats.dedup_skipped, stats.dedup_skipped);
     println!("Total bytes: {}", stats.bytes);
-    println!("Dedup skipped (already stored): {}", stats.dedup_skipped);
     stats
 }
 
