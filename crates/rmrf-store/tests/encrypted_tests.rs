@@ -44,7 +44,7 @@ fn encrypted_get_missing() {
 fn encrypted_exists_delegates() {
     let key = age::x25519::Identity::generate();
     let pubkey = key.to_public();
-    let (_dir, mut inner) = make_store();
+    let (_dir, inner) = make_store();
     let mut enc = EncryptedChunkStore::new(inner, pubkey, key);
 
     let hash = make_hash(1);

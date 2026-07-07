@@ -61,7 +61,12 @@ fn print_manifest_entry(
     }
     let basename = path.file_name().unwrap_or_default().to_string_lossy();
     let ts_str = basename.split('-').next().unwrap_or("unknown");
-    let ts_num = ts_str.parse::<u64>().unwrap_or(0);
+    let ts_digits: String = ts_str.chars().filter(|c| c.is_ascii_digit()).collect();
+    let ts_num = if ts_digits.len() >= 8 {
+        ts_digits[..8].parse::<u64>().unwrap_or(0)
+    } else {
+        0
+    };
 
     if let Some(s) = since {
         if ts_num < s {

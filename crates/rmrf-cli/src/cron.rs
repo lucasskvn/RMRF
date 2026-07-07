@@ -20,7 +20,6 @@ pub fn generate_crontab(jobs: &[Job], binary: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn make_job(name: &str, schedule: &str) -> Job {
         Job {

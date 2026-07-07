@@ -1,5 +1,5 @@
 use rmrf_core::{SourceId, SourceMetadata, SourceType};
-use rmrf_manifest::{Manifest, MANIFEST_VERSION};
+use rmrf_manifest::Manifest;
 use std::path::Path;
 
 fn sample_source_metadata() -> SourceMetadata {

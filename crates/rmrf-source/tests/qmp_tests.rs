@@ -47,7 +47,7 @@ fn qmp_handshake_success() {
         "{\"return\":{}}\n",
     ]);
     wait_for_socket(&socket);
-    let mut client = QmpClient::connect(&socket).unwrap();
+    let client = QmpClient::connect(&socket).unwrap();
     let received = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(received.contains("qmp_capabilities"));
     client.close();
