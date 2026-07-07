@@ -1,4 +1,5 @@
 use crate::config::RmrfConfig;
+use crate::signal;
 use fastcdc::v2016::StreamCDC;
 use indicatif::{ProgressBar, ProgressStyle};
 use rmrf_core::{ChunkStore, DedupIndex, Source, SourceMetadata};
@@ -100,6 +101,11 @@ fn run_chunk_loop(
     let pb = create_backup_progress(total);
 
     for chunk_result in chunker {
+        if signal::SHOULD_EXIT.load(std::sync::atomic::Ordering::SeqCst) {
+            pb.finish_and_clear();
+            eprintln!("Backup interrupted by signal");
+            break;
+        }
         match feed_chunk(chunk_result, chunk_store, dedup_index) {
             Ok(info) => {
                 chunk_hashes.push(info.hash);

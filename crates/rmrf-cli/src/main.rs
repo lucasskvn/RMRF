@@ -8,6 +8,7 @@ mod hypervisor;
 mod lock;
 mod pipeline;
 mod restore;
+mod signal;
 
 use clap::{Parser, Subcommand};
 use config::RmrfConfig;
@@ -123,6 +124,7 @@ enum Command {
 }
 
 fn main() {
+    signal::setup_signal_handler();
     let cli = Cli::parse();
     let cfg = if let Some(p) = cli.config.as_ref() {
         match config::load_config_file(p) {

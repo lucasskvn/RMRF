@@ -22,6 +22,7 @@ toml = "0.8"
 rayon = "1"
 age = "0.11"
 cron = "0.12"
+ctrlc = "3.4"
 
 [dev-dependencies]
 assert_cmd = "2"

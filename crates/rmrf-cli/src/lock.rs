@@ -79,14 +79,37 @@ pub fn check_stale_sentinels(store: &Path) {
             let name_str = name.to_string_lossy();
             if let Some(vm_id) = name_str.strip_prefix(".suspended-") {
                 eprintln!(
-                    "Warning: VM {vm_id} may be suspended — sentinel file {} exists",
-                    entry.path().display()
+                    "Warning: found stale sentinel for VM {vm_id} — attempting auto-resume"
                 );
-                eprintln!("  This can happen if the backup process was killed");
-                eprintln!("  Check VM status: qm status {vm_id} | pct status {vm_id}");
+                let resumed = try_auto_resume(vm_id);
+                if resumed {
+                    eprintln!("  VM {vm_id} resumed successfully, removing sentinel");
+                    std::fs::remove_file(entry.path()).ok();
+                } else {
+                    eprintln!("  Could not auto-resume VM {vm_id} — check manually: qm status {vm_id} | pct status {vm_id}");
+                }
             }
         }
     }
+}
+
+fn try_auto_resume(vm_id: &str) -> bool {
+    for (cmd, _) in &[("qm", "resume"), ("pct", "resume")] {
+        if let Ok(output) = std::process::Command::new(cmd)
+            .args(["status", vm_id])
+            .output()
+        {
+            let status = String::from_utf8_lossy(&output.stdout);
+            if status.contains("paused") || status.contains("suspended") {
+                return std::process::Command::new(cmd)
+                    .args(["resume", vm_id])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
