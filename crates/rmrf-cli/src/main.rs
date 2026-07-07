@@ -73,6 +73,8 @@ enum Command {
         manifest: PathBuf,
         #[arg(short, long)]
         store: Option<PathBuf>,
+        #[arg(long)]
+        rehash: bool,
     },
     Gc {
         #[arg(short, long)]
@@ -137,7 +139,9 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
         } => restore::restore(&manifest, store.as_deref().unwrap_or(&cfg.store), output.as_deref(), force),
         Command::List { store } => commands::list(store.as_deref().unwrap_or(&cfg.store)),
         Command::Info { manifest, store } => commands::info(&manifest, store.as_deref().unwrap_or(&cfg.store)),
-        Command::Verify { manifest, store } => commands::verify(&manifest, store.as_deref().unwrap_or(&cfg.store)),
+        Command::Verify { manifest, store, rehash } => {
+            commands::verify(&manifest, store.as_deref().unwrap_or(&cfg.store), rehash)
+        }
         Command::Gc { store, dry_run } => {
             let store = store.as_deref().unwrap_or(&cfg.store);
             if !try_lock_store(store) {
