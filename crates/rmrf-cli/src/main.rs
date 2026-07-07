@@ -1,97 +1,17 @@
 mod backup;
-mod restore;
 mod commands;
-use clap::{Parser, Subcommand, ValueEnum};
-use rmrf_core::DiskFormat;
-use rmrf_source::{
-    LibvirtLifecycle, NoopLifecycle, ProxmoxLifecycle, ProxmoxLxcLifecycle, VmLifecycle,
-};
-use std::fmt;
+mod disk_detect;
+mod hypervisor;
+mod lock;
+mod restore;
+
+use clap::{Parser, Subcommand};
+use disk_detect::{parse_disk_format, DiskFormatArg};
+use hypervisor::Hypervisor;
+use lock::{check_stale_sentinels, store_sentinel_path, try_lock_store, unlock_store};
 use std::path::PathBuf;
 
 const DEFAULT_STORE: &str = "./rmrf-store";
-const STORE_LOCK: &str = ".rmrf.lock";
-
-fn try_lock_store(store: &std::path::Path) -> bool {
-    if let Err(e) = std::fs::create_dir_all(store) {
-        eprintln!("Error: cannot create store directory: {e}");
-        return false;
-    }
-    let lock_path = store.join(STORE_LOCK);
-    if let Ok(pid_str) = std::fs::read_to_string(&lock_path) {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            let alive = std::path::Path::new(&format!("/proc/{pid}")).exists();
-            if alive {
-                eprintln!("Error: store is locked by process {pid}");
-                return false;
-            }
-            eprintln!("Warning: removing stale lock from PID {pid}");
-        }
-    }
-    if let Err(e) = std::fs::write(&lock_path, format!("{}", std::process::id())) {
-        eprintln!("Error: cannot write store lock: {e}");
-        return false;
-    }
-    true
-}
-
-fn unlock_store(store: &std::path::Path) {
-    let lock_path = store.join(STORE_LOCK);
-    std::fs::remove_file(&lock_path).ok();
-}
-
-fn store_sentinel_path(store: &std::path::Path, vm_id: &str) -> std::path::PathBuf {
-    store.join(format!(".suspended-{vm_id}"))
-}
-
-fn check_stale_sentinels(store: &std::path::Path) {
-    if !store.exists() {
-        return;
-    }
-    if let Ok(dir) = std::fs::read_dir(store) {
-        for entry in dir.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if let Some(vm_id) = name_str.strip_prefix(".suspended-") {
-                eprintln!(
-                    "Warning: VM {vm_id} may be suspended — sentinel file {} exists",
-                    entry.path().display()
-                );
-                eprintln!("  This can happen if the backup process was killed");
-                eprintln!("  Check VM status: qm status {vm_id} | pct status {vm_id}");
-            }
-        }
-    }
-}
-
-#[derive(ValueEnum, Clone)]
-enum Hypervisor {
-    Auto,
-    Proxmox,
-    ProxmoxLxc,
-    Libvirt,
-    Noop,
-}
-
-impl fmt::Display for Hypervisor {
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Hypervisor::Auto => write!(f, "auto"),
-            Hypervisor::Proxmox => write!(f, "proxmox"),
-            Hypervisor::ProxmoxLxc => write!(f, "proxmox-lxc"),
-            Hypervisor::Libvirt => write!(f, "libvirt"),
-            Hypervisor::Noop => write!(f, "noop"),
-        }
-    }
-}
-
-#[derive(ValueEnum, Clone)]
-enum DiskFormatArg {
-    Auto,
-    Raw,
-    Qcow2,
-}
 
 #[derive(Parser)]
 #[command(
@@ -171,7 +91,14 @@ fn main() {
     };
     check_stale_sentinels(store);
 
-    let ok = match cli.command {
+    let ok = dispatch_command(cli.command);
+    if !ok {
+        std::process::exit(1);
+    }
+}
+
+fn dispatch_command(command: Command) -> bool {
+    match command {
         Command::Backup {
             path,
             store,
@@ -203,15 +130,14 @@ fn main() {
         Command::Info { manifest, store } => commands::info(&manifest, &store),
         Command::Verify { manifest, store } => commands::verify(&manifest, &store),
         Command::Gc { store, dry_run } => {
-            if !try_lock_store(&store) { false } else {
+            if !try_lock_store(&store) {
+                false
+            } else {
                 let ok = commands::gc(&store, dry_run);
                 unlock_store(&store);
                 ok
             }
         }
-    };
-    if !ok {
-        std::process::exit(1);
     }
 }
 
@@ -230,7 +156,7 @@ fn handle_backup(
     let resolved_path;
     let path = match (path, &vm) {
         (Some(p), _) => p,
-        (None, Some(vm_id)) => match detect_disk_path(vm_id, disk) {
+        (None, Some(vm_id)) => match disk_detect::detect_disk_path(vm_id, disk) {
             Ok((p, name)) => {
                 resolved_path = p;
                 if disk_name.is_none() {
@@ -251,9 +177,9 @@ fn handle_backup(
 
     let disk_format = parse_disk_format(&format, path);
     let lifecycle = if no_suspend {
-        Box::new(NoopLifecycle) as Box<dyn VmLifecycle>
+        Box::new(rmrf_source::NoopLifecycle) as Box<dyn rmrf_source::VmLifecycle>
     } else {
-        build_vm_lifecycle(vm.as_deref(), &hypervisor)
+        hypervisor::build_vm_lifecycle(vm.as_deref(), &hypervisor)
     };
 
     if !try_lock_store(store) {
@@ -284,153 +210,4 @@ fn handle_backup(
     };
     unlock_store(store);
     ok
-}
-
-fn parse_disk_format(arg: &DiskFormatArg, path: &std::path::Path) -> DiskFormat {
-    match arg {
-        DiskFormatArg::Auto => {
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if ext.eq_ignore_ascii_case("qcow2") {
-                    return DiskFormat::Qcow2;
-                }
-            }
-            DiskFormat::Raw
-        }
-        DiskFormatArg::Raw => DiskFormat::Raw,
-        DiskFormatArg::Qcow2 => DiskFormat::Qcow2,
-    }
-}
-
-fn detect_hypervisor(vm_id: &str) -> Hypervisor {
-    if run_cmd("qm", &["status", vm_id]) {
-        return Hypervisor::Proxmox;
-    }
-    if run_cmd("pct", &["status", vm_id]) {
-        return Hypervisor::ProxmoxLxc;
-    }
-    if run_cmd("virsh", &["dominfo", vm_id]) {
-        return Hypervisor::Libvirt;
-    }
-    Hypervisor::Noop
-}
-
-fn run_cmd(cmd: &str, args: &[&str]) -> bool {
-    std::process::Command::new(cmd)
-        .args(args)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-const QM_DISK_PREFIXES: &[&str] = &["scsi", "virtio", "ide", "sata", "efidisk", "tpmstate"];
-const PCT_DISK_PREFIXES: &[&str] = &["rootfs", "mp"];
-
-fn detect_disk_path(vm_id: &str, disk_spec: Option<&str>, ) -> Result<(PathBuf, String), String> {
-    if let Some(result) = try_qm_config(vm_id, disk_spec)? {
-        return Ok(result);
-    }
-    if let Some(result) = try_pct_config(vm_id, disk_spec)? {
-        return Ok(result);
-    }
-    Err("no disk found in VM config (tried qm + pct)".to_string())
-}
-
-fn try_qm_config( vm_id: &str, disk_spec: Option<&str>, ) -> Result<Option<(PathBuf, String)>, String> {
-    let output = std::process::Command::new("qm")
-        .args(["config", vm_id])
-        .output()
-        .map_err(|e| format!("qm config: {e}"))?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let config = String::from_utf8_lossy(&output.stdout);
-    find_disk_from_config(&config, QM_DISK_PREFIXES, disk_spec)
-}
-
-fn try_pct_config( vm_id: &str, disk_spec: Option<&str>, ) -> Result<Option<(PathBuf, String)>, String> {
-    let output = std::process::Command::new("pct")
-        .args(["config", vm_id])
-        .output()
-        .map_err(|e| format!("pct config: {e}"))?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let config = String::from_utf8_lossy(&output.stdout);
-    find_disk_from_config(&config, PCT_DISK_PREFIXES, disk_spec)
-}
-
-fn find_disk_from_config( config: &str, prefixes: &[&str], disk_spec: Option<&str>,) -> Result<Option<(PathBuf, String)>, String> {
-    let mut candidates: Vec<(&str, &str)> = Vec::new();
-    for line in config.lines() {
-        let line = line.trim();
-        let Some((prefix, rest)) = line.split_once(':') else {
-            continue;
-        };
-        let prefix = prefix.trim();
-        if !prefixes.iter().any(|p| prefix.starts_with(p)) {
-            continue;
-        }
-        if let Some(spec) = disk_spec {
-            if prefix != spec {
-                continue;
-            }
-            let rest = rest.trim();
-            let volume = rest.split(',').next().unwrap_or(rest).trim();
-            if volume.is_empty() || volume == "none" {
-                continue;
-            }
-            return resolve_pvesm_path(volume);
-        }
-        let rest = rest.trim();
-        let volume = rest.split(',').next().unwrap_or(rest).trim();
-        if volume.is_empty() || volume == "none" {
-            continue;
-        }
-        candidates.push((prefix, volume));
-    }
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-    // Prefer main disks over EFI/TPM (usually the first non-efi/tpm one)
-    candidates.sort_by_key(|(name, _)| {
-        if name.starts_with("efidisk") || name.starts_with("tpmstate") { 1 } else { 0 }
-    });
-    resolve_pvesm_path(candidates[0].1)
-}
-
-fn resolve_pvesm_path(volume: &str) -> Result<Option<(PathBuf, String)>, String> {
-    let output = std::process::Command::new("pvesm")
-        .args(["path", volume])
-        .output()
-        .map_err(|e| format!("pvesm path: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("pvesm path {volume}: {stderr}"));
-    }
-    let path_str = String::from_utf8_lossy(&output.stdout);
-    let path = PathBuf::from(path_str.trim());
-    let disk_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "disk".to_string());
-    Ok(Some((path, disk_name)))
-}
-
-fn build_vm_lifecycle(vm_id: Option<&str>, hypervisor: &Hypervisor) -> Box<dyn VmLifecycle> {
-    let hv = match hypervisor {
-        Hypervisor::Auto => {
-            if let Some(id) = vm_id {
-                detect_hypervisor(id)
-            } else {
-                Hypervisor::Noop
-            }
-        }
-        other => other.clone(),
-    };
-    match hv {
-        Hypervisor::Proxmox => Box::new(ProxmoxLifecycle),
-        Hypervisor::ProxmoxLxc => Box::new(ProxmoxLxcLifecycle),
-        Hypervisor::Libvirt => Box::new(LibvirtLifecycle),
-        _ => Box::new(NoopLifecycle),
-    }
 }
