@@ -36,7 +36,9 @@ pub fn run_chunk_pipeline(
     chunk_store: &mut dyn ChunkStore,
     encryption: Option<String>,
 ) -> BackupStats {
-    println!("Source size: {} bytes", metadata.size);
+    let total = metadata.size;
+    let size_str = format_size(total);
+    println!("Source size: {total} bytes ({size_str})");
 
     let index_path = store_dir.join("index.bincode");
     let mut dedup_index = match PersistentDedupIndex::new(index_path) {
@@ -61,7 +63,20 @@ pub fn run_chunk_pipeline(
         label,
         cfg,
         encryption,
+        total,
     )
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GiB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MiB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -75,13 +90,14 @@ fn run_chunk_loop(
     label: &str,
     cfg: &RmrfConfig,
     encryption: Option<String>,
+    total: u64,
 ) -> BackupStats {
     let chunker = StreamCDC::new(source, cfg.cdc_min, cfg.cdc_avg, cfg.cdc_max);
     let mut chunk_hashes = Vec::new();
     let mut chunk_count = 0u64;
     let mut total_bytes = 0u64;
     let mut dedup_skipped = 0u64;
-    let pb = create_backup_spinner();
+    let pb = create_backup_progress(total);
 
     for chunk_result in chunker {
         match feed_chunk(chunk_result, chunk_store, dedup_index) {
@@ -92,9 +108,8 @@ fn run_chunk_loop(
                 if info.was_duplicate {
                     dedup_skipped += 1;
                 }
-                pb.inc(1);
-                pb.set_message(format!("{dedup_skipped}"));
-                pb.set_position(chunk_count);
+                pb.inc(info.data_len as u64);
+                pb.set_message(format!("{dedup_skipped} dedup"));
             }
             Err(e) => {
                 pb.finish_and_clear();
@@ -247,12 +262,13 @@ fn save_manifest(
     stats
 }
 
-fn create_backup_spinner() -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
+fn create_backup_progress(total: u64) -> ProgressBar {
+    let pb = ProgressBar::new(total);
     pb.set_style(
-        ProgressStyle::with_template("{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner())
-            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
+        ProgressStyle::with_template("{spinner} [{bar:20.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, ETA {eta}) | {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈")
+            .progress_chars("=> "),
     );
     pb
 }
