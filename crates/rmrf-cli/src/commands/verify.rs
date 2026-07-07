@@ -9,6 +9,10 @@ pub fn verify(
     rehash: bool,
     identity: Option<&str>,
 ) -> bool {
+    if !store_dir.exists() {
+        eprintln!("Error: store directory not found: {}", store_dir.display());
+        return false;
+    }
     let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
         Err(e) => {

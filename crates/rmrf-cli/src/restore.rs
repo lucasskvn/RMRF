@@ -23,7 +23,7 @@ struct RestoreCtx {
 fn prepare_restore(
     manifest_path: &Path,
     store_dir: &Path,
-    output: Option<&Path>,
+    output: &Path,
     force: bool,
     jobs: usize,
     identity: Option<&str>,
@@ -35,7 +35,7 @@ fn prepare_restore(
             return None;
         }
     };
-    let output_path = resolve_output_path_or_default(output, manifest_path);
+    let output_path = output.to_path_buf();
     if !check_overwrite(&output_path, force) {
         return None;
     }
@@ -57,7 +57,7 @@ fn prepare_restore(
 pub fn restore(
     manifest_path: &Path,
     store_dir: &Path,
-    output: Option<&Path>,
+    output: &Path,
     force: bool,
     jobs: usize,
     identity: Option<&str>,
@@ -97,12 +97,6 @@ fn is_empty_manifest(manifest: &Manifest, output_path: &Path) -> bool {
     } else {
         false
     }
-}
-
-fn resolve_output_path_or_default(output: Option<&Path>, manifest_path: &Path) -> PathBuf {
-    output
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| resolve_output_path(manifest_path))
 }
 
 fn check_overwrite(path: &Path, force: bool) -> bool {
@@ -149,16 +143,6 @@ pub(crate) fn open_chunk_store(
     } else {
         Ok(Box::new(compressed))
     }
-}
-
-fn resolve_output_path(manifest_path: &Path) -> PathBuf {
-    let basename = manifest_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("restored");
-    let name = basename.strip_suffix(".bincode").unwrap_or(basename);
-    let parts: Vec<&str> = name.splitn(2, '-').collect();
-    parts.last().copied().unwrap_or(parts[0]).into()
 }
 
 pub fn restore_file(

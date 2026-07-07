@@ -10,6 +10,10 @@ pub fn list(
     before: Option<&str>,
     source_filter: Option<&str>,
 ) -> bool {
+    if !store_dir.exists() {
+        eprintln!("Error: store directory not found: {}", store_dir.display());
+        return false;
+    }
     let since_parsed = match since.map(parse_date_prefix).transpose() {
         Ok(v) => v,
         Err(e) => {

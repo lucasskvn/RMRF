@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(
     name = "rmrf",
+    version = env!("CARGO_PKG_VERSION"),
     about = "RMRF — chunk-based deduplicated backups with FastCDC + BLAKE3 + zstd",
     long_about = "RMRF — chunk-based deduplicated backups\n\n\
         Features: content-defined chunking (FastCDC), BLAKE3 hashing, \
@@ -34,6 +35,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = "Backup a file, directory, or VM disk")]
     Backup {
         path: Option<PathBuf>,
         #[arg(short, long)]
@@ -59,12 +61,13 @@ enum Command {
         #[arg(long)]
         qmp_socket: Option<PathBuf>,
     },
+    #[command(about = "Restore a backup from a manifest file")]
     Restore {
         manifest: PathBuf,
         #[arg(short, long)]
         store: Option<PathBuf>,
-        #[arg(short, long)]
-        output: Option<PathBuf>,
+        #[arg(short, long, required = true)]
+        output: PathBuf,
         #[arg(long)]
         force: bool,
         #[arg(long, default_value = "4")]
@@ -72,6 +75,7 @@ enum Command {
         #[arg(long)]
         identity: Option<String>,
     },
+    #[command(about = "List all backups in a store")]
     List {
         #[arg(short, long)]
         store: Option<PathBuf>,
@@ -82,11 +86,13 @@ enum Command {
         #[arg(long, help = "Filter by source path (substring match)")]
         source: Option<String>,
     },
+    #[command(about = "Show detailed information about a backup")]
     Info {
         manifest: PathBuf,
         #[arg(short, long)]
         store: Option<PathBuf>,
     },
+    #[command(about = "Verify all chunks in a backup manifest")]
     Verify {
         manifest: PathBuf,
         #[arg(short, long)]
@@ -96,19 +102,24 @@ enum Command {
         #[arg(long)]
         identity: Option<String>,
     },
+    #[command(about = "Garbage collect orphan chunks in a store")]
     Gc {
         #[arg(short, long)]
         store: Option<PathBuf>,
         #[arg(long)]
         dry_run: bool,
     },
+    #[command(about = "Generate crontab entries for scheduled backups")]
     Cron,
+    #[command(about = "Run the backup daemon (scheduler)")]
     Daemon {
         #[arg(long)]
         once: bool,
         #[arg(long)]
         job: Option<String>,
     },
+    #[command(about = "Remove test artifacts from the project root")]
+    Clean,
 }
 
 fn main() {
@@ -142,7 +153,7 @@ fn store_for_command<'a>(command: &'a Command, cfg: &'a RmrfConfig) -> &'a Path 
         Command::Info { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Verify { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Gc { store, .. } => store.as_deref().unwrap_or(&cfg.store),
-        Command::Cron | Command::Daemon { .. } => &cfg.store,
+        Command::Cron | Command::Daemon { .. } | Command::Clean => &cfg.store,
     }
 }
 
@@ -208,7 +219,7 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
         } => restore::restore(
             &manifest,
             store.as_deref().unwrap_or(&cfg.store),
-            output.as_deref(),
+            &output,
             force,
             jobs,
             identity.as_deref(),
@@ -243,10 +254,15 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
         }
         Command::Cron => handle_cron(cfg),
         Command::Daemon { once, job } => daemon::run_daemon(once, job.as_deref(), cfg),
+        Command::Clean => commands::clean(),
     }
 }
 
 fn handle_gc(store: &Path, dry_run: bool) -> bool {
+    if !store.exists() {
+        eprintln!("Error: store directory not found: {}", store.display());
+        return false;
+    }
     if !try_lock_store(store) {
         return false;
     }

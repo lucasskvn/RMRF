@@ -3,7 +3,11 @@ use std::path::Path;
 
 use super::helpers::format_size;
 
-pub fn info(manifest_path: &Path, _store_dir: &Path) -> bool {
+pub fn info(manifest_path: &Path, store_dir: &Path) -> bool {
+    if !store_dir.exists() {
+        eprintln!("Error: store directory not found: {}", store_dir.display());
+        return false;
+    }
     let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
         Err(e) => {
