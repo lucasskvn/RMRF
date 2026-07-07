@@ -131,9 +131,12 @@ fn open_chunk_store(
     let local_store = LocalChunkStore::new(chunks_dir).map_err(|e| e.to_string())?;
     let compressed = CompressedChunkStore::new(local_store);
     if manifest.encryption.is_some() {
-        let identity_str = identity.ok_or_else(|| {
+        let identity_path = identity.ok_or_else(|| {
             "Error: manifest is encrypted but no --identity provided".to_string()
         })?;
+        let identity_str = std::fs::read_to_string(identity_path)
+            .map_err(|e| format!("Error reading identity file: {e}"))?;
+        let identity_str = identity_str.trim();
         let identity = age::x25519::Identity::from_str(identity_str)
             .map_err(|e| format!("Invalid age identity: {e}"))?;
         let recipient = identity.to_public();

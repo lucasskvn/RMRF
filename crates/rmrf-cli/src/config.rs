@@ -2,6 +2,24 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 #[derive(Deserialize, Debug, Clone)]
+pub struct Job {
+    pub name: String,
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    #[serde(default)]
+    pub vm: Option<String>,
+    pub schedule: String,
+    #[serde(default)]
+    pub retain: Option<u64>,
+    #[serde(default)]
+    pub encrypt: Option<String>,
+    #[serde(default)]
+    pub live: bool,
+    #[serde(default)]
+    pub disk: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub struct RmrfConfig {
     #[serde(default = "default_store")]
     pub store: PathBuf,
@@ -13,6 +31,8 @@ pub struct RmrfConfig {
     pub cdc_avg: u32,
     #[serde(default = "default_cdc_max")]
     pub cdc_max: u32,
+    #[serde(default)]
+    pub jobs: Vec<Job>,
 }
 
 fn default_store() -> PathBuf {
@@ -43,6 +63,7 @@ impl Default for RmrfConfig {
             cdc_min: default_cdc_min(),
             cdc_avg: default_cdc_avg(),
             cdc_max: default_cdc_max(),
+            jobs: Vec::new(),
         }
     }
 }

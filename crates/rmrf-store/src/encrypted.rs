@@ -34,6 +34,10 @@ impl<S: ChunkStore> ChunkStore for EncryptedChunkStore<S> {
         }
     }
 
+    fn get_raw(&self, hash: &Hash) -> RmrfResult<Option<Vec<u8>>> {
+        self.inner.get(hash)
+    }
+
     fn exists(&self, hash: &Hash) -> RmrfResult<bool> {
         self.inner.exists(hash)
     }

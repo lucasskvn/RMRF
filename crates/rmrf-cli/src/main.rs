@@ -1,6 +1,8 @@
 mod backup;
 mod commands;
 mod config;
+mod cron;
+mod daemon;
 mod disk_detect;
 mod hypervisor;
 mod lock;
@@ -98,6 +100,13 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    Cron,
+    Daemon {
+        #[arg(long)]
+        once: bool,
+        #[arg(long)]
+        job: Option<String>,
+    },
 }
 
 fn main() {
@@ -114,6 +123,7 @@ fn main() {
         Command::Info { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Verify { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Gc { store, .. } => store.as_deref().unwrap_or(&cfg.store),
+        Command::Cron | Command::Daemon { .. } => &cfg.store,
     };
     check_stale_sentinels(store);
 
@@ -177,6 +187,19 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
                 unlock_store(store);
                 ok
             }
+        }
+        Command::Cron => {
+            let binary = std::env::current_exe().unwrap_or_else(|_| "rmrf".into());
+            let out = cron::generate_crontab(&cfg.jobs, &binary);
+            if out.is_empty() {
+                println!("No scheduled jobs configured in ~/.rmrf.toml");
+            } else {
+                print!("{out}");
+            }
+            true
+        }
+        Command::Daemon { once, job } => {
+            daemon::run_daemon(once, job.as_deref(), cfg)
         }
     }
 }

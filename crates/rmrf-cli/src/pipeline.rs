@@ -25,6 +25,7 @@ enum ProcessResult {
     Error(String),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_chunk_pipeline(
     source: &mut dyn Source,
     metadata: SourceMetadata,
@@ -33,6 +34,7 @@ pub fn run_chunk_pipeline(
     label: &str,
     cfg: &RmrfConfig,
     chunk_store: &mut dyn ChunkStore,
+    encryption: Option<String>,
 ) -> BackupStats {
     println!("Source size: {} bytes", metadata.size);
 
@@ -54,6 +56,7 @@ pub fn run_chunk_pipeline(
         timestamp,
         label,
         cfg,
+        encryption,
     )
 }
 
@@ -67,6 +70,7 @@ fn run_chunk_loop(
     timestamp: &str,
     label: &str,
     cfg: &RmrfConfig,
+    encryption: Option<String>,
 ) -> BackupStats {
     let chunker = StreamCDC::new(source, cfg.cdc_min, cfg.cdc_avg, cfg.cdc_max);
     let mut chunk_hashes = Vec::new();
@@ -96,7 +100,8 @@ fn run_chunk_loop(
 
     pb.finish_and_clear();
     finish_backup(&chunk_hashes, dedup_index, metadata, store_dir, timestamp, label,
-                  BackupStats { chunks: chunk_count, bytes: total_bytes, dedup_skipped })
+                  BackupStats { chunks: chunk_count, bytes: total_bytes, dedup_skipped },
+                  encryption)
 }
 
 fn feed_chunk(
@@ -163,6 +168,7 @@ fn process_chunk(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_backup(
     chunk_hashes: &[[u8; 32]],
     dedup_index: &mut PersistentDedupIndex,
@@ -171,11 +177,12 @@ fn finish_backup(
     timestamp: &str,
     label: &str,
     stats: BackupStats,
+    encryption: Option<String>,
 ) -> BackupStats {
     if let Err(e) = dedup_index.save() {
         eprintln!("Warning: failed to save dedup index: {e}");
     }
-    save_manifest(chunk_hashes, metadata, store_dir, timestamp, label, stats)
+    save_manifest(chunk_hashes, metadata, store_dir, timestamp, label, stats, encryption)
 }
 
 fn save_manifest(
@@ -185,8 +192,9 @@ fn save_manifest(
     timestamp: &str,
     label: &str,
     stats: BackupStats,
+    encryption: Option<String>,
 ) -> BackupStats {
-    let manifest = Manifest::new(metadata, chunk_hashes.to_vec(), None);
+    let manifest = Manifest::new(metadata, chunk_hashes.to_vec(), encryption);
     let manifests_dir = store_dir.join("manifests");
     if let Err(e) = fs::create_dir_all(&manifests_dir) {
         eprintln!("Error creating manifests directory: {e}");

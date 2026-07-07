@@ -45,7 +45,7 @@ rmrf --help
 Source (fichier/disk) → FastCDC (chunks variables) → BLAKE3 (hash)
   → DedupIndex (déjà stocké ?)
       oui → incrémenter refcount, skip
-      non  → zstd compress → LocalChunkStore → DedupIndex insert
+      non  → [age encrypt →] zstd compress → LocalChunkStore → DedupIndex insert
   → Manifest (liste des hashes) → manifests/<timestamp>-<nom>.bincode
 ```
 
@@ -59,16 +59,46 @@ Source (fichier/disk) → FastCDC (chunks variables) → BLAKE3 (hash)
 ├── chunks/
 │   └── ab/
 │       └── cdef0123456789...ff.zst
-└── index.bincode
+├── index.bincode
+└── .rmrf.lock
 ```
 
 - **manifests/** : un fichier `.bincode` par backup. Nom = `<UTC timestamp>-<basename>.bincode`
 - **chunks/** : arborescence 2 niveaux. Les 2 premiers caractères du hash hex = dossier, reste = nom de fichier + `.zst` (compressé)
 - **index.bincode** : index de déduplication persistant (HashMap sérialisée)
+- **.rmrf.lock** : verrou PID-based pour éviter les accès concurrents
 
 ---
 
-## 3. Commandes
+## 3. Configuration
+
+RMRF lit `~/.rmrf.toml` s'il existe. Tous les champs sont optionnels :
+
+```toml
+store = "/var/lib/rmrf"
+compression_level = 10
+cdc_min = 4096
+cdc_avg = 16384
+cdc_max = 65536
+```
+
+| Champ | Défaut | Description |
+|-------|--------|-------------|
+| `store` | `./rmrf-store` | Chemin du store par défaut |
+| `compression_level` | `10` | Niveau zstd (1-22) |
+| `cdc_min` | `4096` | Taille minimale de chunk (bytes) |
+| `cdc_avg` | `16384` | Taille moyenne cible de chunk (bytes) |
+| `cdc_max` | `65536` | Taille maximale de chunk (bytes) |
+
+Surcharge possible avec `--config <path>` :
+
+```bash
+rmrf --config /etc/rmrf.toml backup /path/to/file
+```
+
+---
+
+## 4. Commandes
 
 ### `backup` — Sauvegarder
 
@@ -88,28 +118,68 @@ rmrf backup /path/to/directory -s /path/to/store
 
 Tous les fichiers du dossier (et sous-dossiers) sont sauvegardés. **Un manifest par fichier.** Les fichiers cachés (commençant par `.`) sont ignorés.
 
-#### VM (Proxmox/Libvirt)
+#### VM Proxmox (auto-détection du disque)
+
+```bash
+rmrf backup --vm 103 -s /path/to/store
+```
+
+Le chemin du disque est détecté automatiquement via `qm config` + `pvesm path`. La VM est suspendue avant la lecture, puis relancée.
+
+Pour sélectionner un disque spécifique :
+
+```bash
+rmrf backup --vm 103 --disk scsi0 -s /path/to/store
+```
+
+#### VM Proxmox (chemin explicite)
 
 ```bash
 rmrf backup /dev/pve/vm-100-disk-0 -s /path/to/store \
-  --vm 100 \
-  --hypervisor proxmox \
-  --format qcow2 \
-  --disk-name virtio0
+  --vm 100 --hypervisor proxmox --format qcow2
 ```
 
-La VM est suspendue avant la lecture du disque, puis relancée après. Le manifest contient les métadonnées VM (`vm_id`, `disk_name`, `format`).
+#### LXC (conteneur Proxmox)
+
+```bash
+rmrf backup --vm 100 --hypervisor proxmox-lxc -s /path/to/store
+```
+
+#### Live backup (QEMU QMP, sans suspend)
+
+```bash
+rmrf backup --vm 103 --live --qmp-socket /var/run/qemu-server/103.qmp \
+  -s /path/to/store
+```
+
+Crée un snapshot QEMU via QMP (`blockdev-snapshot-sync`), backup le snapshot, puis le nettoie. La VM reste running.
+
+#### Backup chiffré (age)
+
+```bash
+# Générer une clé age
+age-keygen -o ~/.rmrf-key.txt
+
+# Backup avec chiffrement
+rmrf backup /path/to/file -s /path/to/store \
+  --encrypt "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
+```
+
+Le manifest est marqué `encryption: age` et les chunks sont chiffrés avant stockage.
 
 #### Flags
 
 | Flag | Description | Défaut |
 |------|-------------|--------|
-| `-s, --store <PATH>` | Répertoire du store | `./rmrf-store` |
+| `-s, --store <PATH>` | Répertoire du store | `./rmrf-store` (ou config) |
 | `--vm <ID>` | ID de la VM (active suspend/resume) | — |
-| `--hypervisor <TYPE>` | `auto` (détecte), `proxmox`, `libvirt`, `noop` | `auto` |
-| `--no-suspend` | Ne pas suspendre la VM (pour disque déjà snapshotté) | — |
-| `--format <FMT>` | `auto` (détecte par extension), `raw`, `qcow2` | `auto` |
-| `--disk-name <NAME>` | Nom du disque pour les métadonnées | basename du path |
+| `--disk <SPEC>` | Nom du disque (scsi0, virtio0, rootfs, mp0...) | auto-détection |
+| `--hypervisor <TYPE>` | `auto`, `proxmox`, `proxmox-lxc`, `libvirt`, `noop` | `auto` |
+| `--no-suspend` | Ne pas suspendre la VM | — |
+| `--live` | Backup à chaud via QMP snapshot | — |
+| `--qmp-socket <PATH>` | Chemin du socket QMP (ex: `/var/run/qemu-server/103.qmp`) | — |
+| `--format <FMT>` | `auto`, `raw`, `qcow2` | `auto` |
+| `--encrypt <PUBKEY>` | Clé publique age pour chiffrer les chunks | — |
 | `--retain <DAYS>` | Supprime les manifests plus vieux que N jours, puis GC | — |
 
 #### Rétention automatique
@@ -125,7 +195,7 @@ Après le backup, supprime les manifests âgés de plus de 30 jours, décrément
 ### `restore` — Restaurer
 
 ```bash
-rmrf restore <manifest> -s <store> [-o <output>] [--force]
+rmrf restore <manifest> -s <store> [-o <output>] [--force] [--jobs <N>]
 ```
 
 #### Exemple
@@ -137,6 +207,23 @@ rmrf restore /path/to/store/manifests/20260706T174941Z-file.txt.bincode \
 ```
 
 Si `-o` est omis, le fichier est restauré dans le répertoire courant avec le nom d'origine (extrait du nom du manifest).
+
+#### Restauration parallèle
+
+```bash
+rmrf restore <manifest> -s <store> -o /tmp/restored --jobs 8
+```
+
+Les chunks sont téléchargés en parallèle par lots de 64 (bounded RAM). Défaut : 4 jobs.
+
+#### Restauration chiffrée
+
+```bash
+rmrf restore <manifest> -s <store> -o /tmp/restored \
+  --identity ~/.rmrf-key.txt
+```
+
+Le manifest chiffré est détecté automatiquement. La clé privée age est nécessaire.
 
 #### Safety : `--force`
 
@@ -170,6 +257,19 @@ Affiche tous les manifests du store :
 
 Colonnes : timestamp UTC | taille source | nombre de chunks | chemin source
 
+#### Filtres
+
+```bash
+rmrf list -s /path/to/store --since 20260701 --before 20260731
+rmrf list -s /path/to/store --source "vm-103"
+```
+
+| Flag | Description |
+|------|-------------|
+| `--since <YYYYMMDD>` | Uniquement les backups après cette date |
+| `--before <YYYYMMDD>` | Uniquement les backups avant cette date |
+| `--source <TEXT>` | Filtre par sous-chaîne dans le chemin source |
+
 ---
 
 ### `info` — Détails d'un backup
@@ -180,7 +280,7 @@ rmrf info <manifest> -s /path/to/store
 
 Exemple sortie fichier :
 ```
-Version:     v2
+Version:     v3
 Source path: /path/to/file.txt
 Source size: 25 (25 B)
 Source type: File
@@ -191,13 +291,21 @@ Chunks:      1
 
 Exemple sortie VM :
 ```
-Version:     v2
+Version:     v3
 Source path: /mnt/pve/TrueNAS/images/103/vm-103-disk-1.qcow2
 Source size: 3221946368 (3.0 GiB)
 Source type: VmDisk { vm_id: "103", disk_name: "virtio0", format: Qcow2 }
 Modified:    1783360186
 Permissions: 100644
 Chunks:      197
+```
+
+Exemple sortie backup chiffré :
+```
+Version:     v3
+Encryption:  age
+Source path: /path/to/secret.txt
+...
 ```
 
 ---
@@ -218,6 +326,18 @@ Si un chunk manque :
 ```
 MISSING: chunk 36/84db6b22... not found in store
 Error: 1 chunk(s) missing
+```
+
+#### Vérification forte (re-hachage BLAKE3)
+
+```bash
+rmrf verify <manifest> -s /path/to/store --rehash
+```
+
+Décompresse et re-hache chaque chunk avec BLAKE3 pour vérifier l'intégrité des données (pas seulement la présence). Détecte la corruption silencieuse.
+
+```
+OK: all 197 chunks present and verified (re-hashed)
 ```
 
 ---
@@ -254,34 +374,46 @@ Supprime les fichiers de test créés dans le répertoire courant par les script
 
 ---
 
-## 4. Workflow Proxmox complet
+## 5. Workflow Proxmox complet
 
-### Backup d'une VM en production
+### Backup d'une VM en production (auto-détection)
 
 ```bash
-# 1. Identifier la VM
-qm list
-qm config 103                    # voir la config
-qm status 103                    # running ou stopped
+# 1. Backup (auto-détecte le disque, suspend la VM)
+rmrf backup --vm 103 -s /var/lib/rmrf
 
-# 2. Trouver le chemin du disque
-#    Dans "qm config 103", chercher la ligne scsi0/ide0/virtio0 :
-#    scsi0: TrueNAS:103/vm-103-disk-1.qcow2,size=3G
-pvesm path TrueNAS:103/vm-103-disk-1.qcow2
-#    → /mnt/pve/TrueNAS/images/103/vm-103-disk-1.qcow2
-
-# 3. Backup (la VM sera suspendue pendant la lecture)
-rmrf backup /mnt/pve/TrueNAS/images/103/vm-103-disk-1.qcow2 \
-  -s /var/lib/rmrf \
-  --vm 103 \
-  --hypervisor proxmox \
-  --format qcow2 \
-  --disk-name virtio0
-
-# 4. Vérifier le backup
+# 2. Vérifier le backup
 rmrf list -s /var/lib/rmrf
 rmrf info <manifest> -s /var/lib/rmrf
 rmrf verify <manifest> -s /var/lib/rmrf
+```
+
+### Backup d'un conteneur LXC
+
+```bash
+rmrf backup --vm 100 --hypervisor proxmox-lxc -s /var/lib/rmrf
+```
+
+### Backup live (QMP, VM reste running)
+
+```bash
+rmrf backup --vm 103 --live --qmp-socket /var/run/qemu-server/103.qmp \
+  -s /var/lib/rmrf
+```
+
+### Backup chiffré
+
+```bash
+# Générer la clé
+age-keygen -o ~/.rmrf-key.txt
+PUBKEY=$(grep "^# public key:" ~/.rmrf-key.txt | cut -d' ' -f4)
+
+# Backup chiffré
+rmrf backup --vm 103 -s /var/lib/rmrf --encrypt "$PUBKEY"
+
+# Restauration
+rmrf restore <manifest> -s /var/lib/rmrf -o /tmp/restored.qcow2 \
+  --identity ~/.rmrf-key.txt
 ```
 
 ### Restore d'une VM
@@ -296,7 +428,7 @@ ls -lh /tmp/vm-103-restored.qcow2
 # 3. Arrêter la VM
 qm stop 103
 
-# 4. Remplacer le disque (exemple avec TrueNAS NFS)
+# 4. Remplacer le disque
 cp /tmp/vm-103-restored.qcow2 /mnt/pve/TrueNAS/images/103/vm-103-disk-1.qcow2
 
 # 5. Redémarrer la VM
@@ -307,13 +439,10 @@ qm start 103
 
 ```bash
 # Cron : backup quotidien, conserve 30 jours
-0 3 * * * rmrf backup /mnt/pve/TrueNAS/images/103/vm-103-disk-1.qcow2 \
-  -s /var/lib/rmrf --vm 103 --hypervisor proxmox --format qcow2 --retain 30
+0 3 * * * rmrf backup --vm 103 -s /var/lib/rmrf --retain 30
 ```
 
 ### Mode sans suspension (snapshot externe)
-
-Si tu as déjà un snapshot ZFS/LVM ou un disque inactif :
 
 ```bash
 rmrf backup /mnt/snapshot/vm-103-disk-1.qcow2 \
@@ -324,7 +453,7 @@ rmrf backup /mnt/snapshot/vm-103-disk-1.qcow2 \
 
 ---
 
-## 5. FAQ
+## 6. FAQ
 
 ### "Error reading manifests directory: No such file or directory"
 
@@ -368,4 +497,27 @@ qemu-nbd --disconnect /dev/nbd0
 
 ### `--hypervisor auto` ne détecte rien
 
-`auto` teste `qm status <vmid>` puis `virsh dominfo <vmid>`. Si ni `qm` ni `virsh` n'est installé, ou si la VM n'existe pas dans l'hyperviseur, il fallback vers `NoopLifecycle` (pas de suspend/resume). Force l'hyperviseur explicitement avec `--hypervisor proxmox` ou `--hypervisor libvirt`.
+`auto` teste `qm status <vmid>` puis `pct status <vmid>` puis `virsh dominfo <vmid>`. Si aucun hyperviseur n'est trouvé, il fallback vers `NoopLifecycle` (pas de suspend/resume). Force l'hyperviseur explicitement avec `--hypervisor proxmox`, `--hypervisor proxmox-lxc` ou `--hypervisor libvirt`.
+
+### Comment générer une clé age ?
+
+```bash
+# Installer age (une fois)
+apt install age       # Debian/Ubuntu
+pacman -S age         # Arch
+cargo install age     # depuis les sources
+
+# Générer une clé
+age-keygen -o ~/.rmrf-key.txt
+
+# La clé publique est dans le commentaire
+grep "^# public key:" ~/.rmrf-key.txt
+```
+
+### Le backup live QMP ne fonctionne pas
+
+Vérifie que :
+1. Le socket QMP existe : `ls -l /var/run/qemu-server/<vmid>.qmp`
+2. Le device QEMU est correct : `--disk scsi0` (ou `virtio0`, `ide0`...)
+3. QEMU est configuré avec `-qmp unix:/var/run/qemu-server/<vmid>.qmp,server,nowait`
+4. Le format du disque est supporté (qcow2 recommandé pour les snapshots)

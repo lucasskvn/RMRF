@@ -168,8 +168,10 @@ fn backup_file(
 
     let metadata = file_source.metadata();
     let file_size = metadata.size;
+    let encryption_key = encrypt.map(|s| s.to_string());
     let stats = run_chunk_pipeline(
         &mut file_source, metadata, store_dir, timestamp, label, cfg, &mut *chunk_store,
+        encryption_key,
     );
     if stats.chunks == 0 && file_size > 0 {
         eprintln!("Warning: backup produced 0 chunks for non-empty file");
@@ -214,6 +216,7 @@ pub fn backup_vm(
         }
     };
 
+    let encryption_key = encrypt.map(|s| s.to_string());
     let stats = run_chunk_pipeline(
         &mut vm_source,
         metadata,
@@ -222,6 +225,7 @@ pub fn backup_vm(
         &basename,
         cfg,
         &mut *chunk_store,
+        encryption_key,
     );
     if stats.chunks == 0 {
         eprintln!("Warning: backup produced 0 chunks for VM disk");
