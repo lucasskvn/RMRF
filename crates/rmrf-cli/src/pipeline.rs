@@ -3,7 +3,7 @@ use fastcdc::v2016::StreamCDC;
 use indicatif::{ProgressBar, ProgressStyle};
 use rmrf_core::{ChunkStore, DedupIndex, Source, SourceMetadata};
 use rmrf_manifest::Manifest;
-use rmrf_store::{hash_data, CompressedChunkStore, LocalChunkStore, PersistentDedupIndex};
+use rmrf_store::{hash_data, PersistentDedupIndex};
 use std::fs;
 use std::path::Path;
 
@@ -32,23 +32,10 @@ pub fn run_chunk_pipeline(
     timestamp: &str,
     label: &str,
     cfg: &RmrfConfig,
+    chunk_store: &mut dyn ChunkStore,
 ) -> BackupStats {
     println!("Source size: {} bytes", metadata.size);
 
-    let chunks_dir = store_dir.join("chunks");
-    if let Err(e) = fs::create_dir_all(&chunks_dir) {
-        eprintln!("Error creating chunks directory: {e}");
-        return BackupStats { chunks: 0, bytes: 0, dedup_skipped: 0 };
-    }
-    let local_store = match LocalChunkStore::new(chunks_dir) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error creating chunk store: {e}");
-            return BackupStats { chunks: 0, bytes: 0, dedup_skipped: 0 };
-        }
-    };
-
-    let mut chunk_store = CompressedChunkStore::with_level(local_store, cfg.compression_level);
     let index_path = store_dir.join("index.bincode");
     let mut dedup_index = match PersistentDedupIndex::new(index_path) {
         Ok(idx) => idx,
@@ -60,7 +47,7 @@ pub fn run_chunk_pipeline(
 
     run_chunk_loop(
         source,
-        &mut chunk_store,
+        chunk_store,
         &mut dedup_index,
         store_dir,
         metadata,
@@ -73,7 +60,7 @@ pub fn run_chunk_pipeline(
 #[allow(clippy::too_many_arguments)]
 fn run_chunk_loop(
     source: &mut dyn Source,
-    chunk_store: &mut CompressedChunkStore<LocalChunkStore>,
+    chunk_store: &mut dyn ChunkStore,
     dedup_index: &mut PersistentDedupIndex,
     store_dir: &Path,
     metadata: SourceMetadata,
@@ -114,7 +101,7 @@ fn run_chunk_loop(
 
 fn feed_chunk(
     result: std::result::Result<fastcdc::v2016::ChunkData, fastcdc::v2016::Error>,
-    chunk_store: &mut CompressedChunkStore<LocalChunkStore>,
+    chunk_store: &mut dyn ChunkStore,
     dedup_index: &mut PersistentDedupIndex,
 ) -> std::result::Result<ChunkInfo, String> {
     let chunk = result.map_err(|e| format!("Error reading chunk: {e}"))?;
@@ -131,7 +118,7 @@ fn feed_chunk(
 fn process_chunk(
     hash: &[u8; 32],
     data: &[u8],
-    chunk_store: &mut CompressedChunkStore<LocalChunkStore>,
+    chunk_store: &mut dyn ChunkStore,
     dedup_index: &mut PersistentDedupIndex,
 ) -> ProcessResult {
     match dedup_index.lookup(hash) {
@@ -199,11 +186,7 @@ fn save_manifest(
     label: &str,
     stats: BackupStats,
 ) -> BackupStats {
-    let manifest = Manifest {
-        version: rmrf_manifest::MANIFEST_VERSION,
-        source: metadata,
-        chunks: chunk_hashes.to_vec(),
-    };
+    let manifest = Manifest::new(metadata, chunk_hashes.to_vec(), None);
     let manifests_dir = store_dir.join("manifests");
     if let Err(e) = fs::create_dir_all(&manifests_dir) {
         eprintln!("Error creating manifests directory: {e}");

@@ -1,16 +1,37 @@
 use crate::config::RmrfConfig;
 use crate::pipeline::run_chunk_pipeline;
-use rmrf_core::{DiskFormat, Source};
+use rmrf_core::{ChunkStore, DiskFormat, Source};
 use rmrf_source::{FileSource, VmLifecycle, VmSource};
+use rmrf_store::{CompressedChunkStore, EncryptedChunkStore, LocalChunkStore};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::str::FromStr;
 
 pub use crate::pipeline::BackupStats;
 
-pub fn backup(source: &Path, store_dir: &Path, cfg: &RmrfConfig) -> bool {
+fn open_chunk_store(
+    store_dir: &Path,
+    cfg: &RmrfConfig,
+    encrypt: Option<&str>,
+) -> Result<Box<dyn ChunkStore>, String> {
+    let chunks_dir = store_dir.join("chunks");
+    fs::create_dir_all(&chunks_dir).map_err(|e| format!("Error creating chunks directory: {e}"))?;
+    let local = LocalChunkStore::new(chunks_dir).map_err(|e| e.to_string())?;
+    let compressed = CompressedChunkStore::with_level(local, cfg.compression_level);
+    if let Some(pubkey_str) = encrypt {
+        let recipient = age::x25519::Recipient::from_str(pubkey_str)
+            .map_err(|e| format!("Invalid age recipient: {e}"))?;
+        let identity = age::x25519::Identity::generate();
+        Ok(Box::new(EncryptedChunkStore::new(compressed, recipient, identity)))
+    } else {
+        Ok(Box::new(compressed))
+    }
+}
+
+pub fn backup(source: &Path, store_dir: &Path, cfg: &RmrfConfig, encrypt: Option<&str>) -> bool {
     if source.is_dir() {
-        backup_dir(source, store_dir, cfg)
+        backup_dir(source, store_dir, cfg, encrypt)
     } else {
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let basename = source
@@ -18,7 +39,7 @@ pub fn backup(source: &Path, store_dir: &Path, cfg: &RmrfConfig) -> bool {
             .unwrap_or(source.as_os_str())
             .to_string_lossy()
             .to_string();
-        backup_file(source, store_dir, &timestamp, &basename, cfg).is_some()
+        backup_file(source, store_dir, &timestamp, &basename, cfg, encrypt).is_some()
     }
 }
 
@@ -46,7 +67,7 @@ fn compute_rel_label(path: &Path, dir: &Path) -> String {
         .replace('/', "_")
 }
 
-fn backup_dir(dir: &Path, store_dir: &Path, cfg: &RmrfConfig) -> bool {
+fn backup_dir(dir: &Path, store_dir: &Path, cfg: &RmrfConfig, encrypt: Option<&str>) -> bool {
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     println!("Backup directory: {}", dir.display());
 
@@ -59,7 +80,7 @@ fn backup_dir(dir: &Path, store_dir: &Path, cfg: &RmrfConfig) -> bool {
     };
 
     println!("Found {} files", files.len());
-    let (stats, errors) = backup_all_files(&files, dir, store_dir, &timestamp, cfg);
+    let (stats, errors) = backup_all_files(&files, dir, store_dir, &timestamp, cfg, encrypt);
     if errors > 0 {
         eprintln!("Warning: {errors} file(s) failed to backup");
     }
@@ -75,12 +96,13 @@ fn backup_all_files(
     store_dir: &Path,
     timestamp: &str,
     cfg: &RmrfConfig,
+    encrypt: Option<&str>,
 ) -> (DirStats, u64) {
     let mut stats = DirStats::default();
     let mut errors = 0u64;
     for path in files {
         let rel = compute_rel_label(path, dir);
-        match backup_file(path, store_dir, timestamp, &rel, cfg) {
+        match backup_file(path, store_dir, timestamp, &rel, cfg, encrypt) {
             Some(s) => stats.add(s),
             None => errors += 1,
         }
@@ -124,6 +146,7 @@ fn backup_file(
     timestamp: &str,
     label: &str,
     cfg: &RmrfConfig,
+    encrypt: Option<&str>,
 ) -> Option<BackupStats> {
     println!("Backup: {}", source.display());
 
@@ -135,9 +158,19 @@ fn backup_file(
         }
     };
 
+    let mut chunk_store = match open_chunk_store(store_dir, cfg, encrypt) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return None;
+        }
+    };
+
     let metadata = file_source.metadata();
     let file_size = metadata.size;
-    let stats = run_chunk_pipeline(&mut file_source, metadata, store_dir, timestamp, label, cfg);
+    let stats = run_chunk_pipeline(
+        &mut file_source, metadata, store_dir, timestamp, label, cfg, &mut *chunk_store,
+    );
     if stats.chunks == 0 && file_size > 0 {
         eprintln!("Warning: backup produced 0 chunks for non-empty file");
         None
@@ -146,6 +179,7 @@ fn backup_file(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn backup_vm(
     path: &std::path::Path,
     store_dir: &std::path::Path,
@@ -154,6 +188,7 @@ pub fn backup_vm(
     format: DiskFormat,
     lifecycle: Box<dyn VmLifecycle>,
     cfg: &RmrfConfig,
+    encrypt: Option<&str>,
 ) -> bool {
     let mut vm_source = match VmSource::open(path, vm_id, disk_name, format, lifecycle) {
         Ok(vs) => vs,
@@ -171,6 +206,14 @@ pub fn backup_vm(
         .to_string_lossy()
         .to_string();
 
+    let mut chunk_store = match open_chunk_store(store_dir, cfg, encrypt) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return false;
+        }
+    };
+
     let stats = run_chunk_pipeline(
         &mut vm_source,
         metadata,
@@ -178,6 +221,7 @@ pub fn backup_vm(
         &timestamp,
         &basename,
         cfg,
+        &mut *chunk_store,
     );
     if stats.chunks == 0 {
         eprintln!("Warning: backup produced 0 chunks for VM disk");

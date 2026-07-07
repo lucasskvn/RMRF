@@ -50,6 +50,8 @@ enum Command {
         no_suspend: bool,
         #[arg(long, default_value = "auto")]
         hypervisor: Hypervisor,
+        #[arg(long)]
+        encrypt: Option<String>,
     },
     Restore {
         manifest: PathBuf,
@@ -61,6 +63,8 @@ enum Command {
         force: bool,
         #[arg(long, default_value = "4")]
         jobs: usize,
+        #[arg(long)]
+        identity: Option<String>,
     },
     List {
         #[arg(short, long)]
@@ -121,6 +125,7 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             format,
             no_suspend,
             hypervisor,
+            encrypt,
         } => handle_backup(
             path.as_deref(),
             store.as_deref().unwrap_or(&cfg.store),
@@ -132,6 +137,7 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             no_suspend,
             hypervisor,
             cfg,
+            encrypt.as_deref(),
         ),
         Command::Restore {
             manifest,
@@ -139,7 +145,8 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             output,
             force,
             jobs,
-        } => restore::restore(&manifest, store.as_deref().unwrap_or(&cfg.store), output.as_deref(), force, jobs),
+            identity,
+        } => restore::restore(&manifest, store.as_deref().unwrap_or(&cfg.store), output.as_deref(), force, jobs, identity.as_deref()),
         Command::List { store } => commands::list(store.as_deref().unwrap_or(&cfg.store)),
         Command::Info { manifest, store } => commands::info(&manifest, store.as_deref().unwrap_or(&cfg.store)),
         Command::Verify { manifest, store, rehash } => {
@@ -170,6 +177,7 @@ fn handle_backup(
     no_suspend: bool,
     hypervisor: Hypervisor,
     cfg: &RmrfConfig,
+    encrypt: Option<&str>,
 ) -> bool {
     let resolved_path;
     let path = match (path, &vm) {
@@ -209,11 +217,11 @@ fn handle_backup(
             .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
         let sentinel = store_sentinel_path(store, vm_id);
         std::fs::write(&sentinel, chrono::Utc::now().to_rfc3339()).ok();
-        let result = backup::backup_vm(path, store, vm_id, disk_label, disk_format, lifecycle, cfg);
+        let result = backup::backup_vm(path, store, vm_id, disk_label, disk_format, lifecycle, cfg, encrypt);
         std::fs::remove_file(&sentinel).ok();
         result
     } else {
-        backup::backup(path, store, cfg)
+        backup::backup(path, store, cfg, encrypt)
     };
 
     if !ok {

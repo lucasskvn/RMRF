@@ -15,11 +15,7 @@ fn sample_source_metadata() -> SourceMetadata {
 
 #[test]
 fn manifest_save_load_roundtrip() {
-    let manifest = Manifest {
-        version: MANIFEST_VERSION,
-        source: sample_source_metadata(),
-        chunks: vec![[1u8; 32], [2u8; 32]],
-    };
+    let manifest = Manifest::new(sample_source_metadata(), vec![[1u8; 32], [2u8; 32]], None);
     let tmp = std::env::temp_dir().join("test_manifest_roundtrip.bincode");
     manifest.save(&tmp).unwrap();
     let loaded = Manifest::load(&tmp).unwrap();
@@ -37,6 +33,7 @@ fn manifest_load_rejects_wrong_version() {
         version: 99,
         source: sample_source_metadata(),
         chunks: vec![],
+        encryption: None,
     };
     let tmp = std::env::temp_dir().join("test_manifest_bad_version.bincode");
     manifest.save(&tmp).unwrap();
@@ -54,9 +51,8 @@ fn manifest_load_missing_file() {
 
 #[test]
 fn manifest_empty_chunks_is_valid() {
-    let manifest = Manifest {
-        version: MANIFEST_VERSION,
-        source: SourceMetadata {
+    let manifest = Manifest::new(
+        SourceMetadata {
             id: SourceId("empty".into()),
             path: "/dev/null".into(),
             size: 0,
@@ -64,8 +60,9 @@ fn manifest_empty_chunks_is_valid() {
             permissions: 0o000,
             source_type: SourceType::File,
         },
-        chunks: vec![],
-    };
+        vec![],
+        None,
+    );
     let tmp = std::env::temp_dir().join("test_manifest_empty.bincode");
     manifest.save(&tmp).unwrap();
     let loaded = Manifest::load(&tmp).unwrap();

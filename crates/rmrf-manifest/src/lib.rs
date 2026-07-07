@@ -4,16 +4,26 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-pub const MANIFEST_VERSION: u32 = 2;
+pub const MANIFEST_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub version: u32,
     pub source: SourceMetadata,
     pub chunks: Vec<Hash>,
+    pub encryption: Option<String>,
 }
 
 impl Manifest {
+    pub fn new(source: SourceMetadata, chunks: Vec<Hash>, encryption: Option<String>) -> Self {
+        Manifest {
+            version: MANIFEST_VERSION,
+            source,
+            chunks,
+            encryption,
+        }
+    }
+
     pub fn save(&self, path: &Path) -> Result<()> {
         let data = bincode::serialize(self)
             .map_err(|e| RmrfError::Msg(format!("manifest serialize: {e}")))?;

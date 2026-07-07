@@ -66,6 +66,9 @@ pub trait ChunkStore: Send + Sync {
     fn get(&self, hash: &Hash) -> Result<Option<Vec<u8>>>;
     fn exists(&self, hash: &Hash) -> Result<bool>;
     fn delete(&mut self, hash: &Hash) -> Result<()>;
+    fn get_raw(&self, hash: &Hash) -> Result<Option<Vec<u8>>> {
+        self.get(hash)
+    }
 }
 
 pub trait DedupIndex {

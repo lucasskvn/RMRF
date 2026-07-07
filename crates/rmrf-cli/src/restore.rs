@@ -2,19 +2,20 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use rmrf_core::ChunkStore;
 use rmrf_manifest::Manifest;
-use rmrf_store::{CompressedChunkStore, LocalChunkStore};
+use rmrf_store::{CompressedChunkStore, EncryptedChunkStore, LocalChunkStore};
 use std::fs;
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::str::FromStr;
 
 const RESTORE_BATCH: usize = 64;
 
 struct RestoreCtx {
     manifest: Manifest,
     output_path: std::path::PathBuf,
-    chunk_store: CompressedChunkStore<LocalChunkStore>,
+    chunk_store: Box<dyn ChunkStore>,
     jobs: usize,
 }
 
@@ -24,6 +25,7 @@ fn prepare_restore(
     output: Option<&Path>,
     force: bool,
     jobs: usize,
+    identity: Option<&str>,
 ) -> Option<RestoreCtx> {
     let manifest = match Manifest::load(manifest_path) {
         Ok(m) => m,
@@ -36,10 +38,10 @@ fn prepare_restore(
     if !check_overwrite(&output_path, force) {
         return None;
     }
-    let chunk_store = match open_chunk_store(store_dir) {
+    let chunk_store = match open_chunk_store(store_dir, &manifest, identity) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Error opening chunk store: {e}");
+            eprintln!("{e}");
             return None;
         }
     };
@@ -52,10 +54,11 @@ pub fn restore(
     output: Option<&Path>,
     force: bool,
     jobs: usize,
+    identity: Option<&str>,
 ) -> bool {
     println!("Restore: {}", manifest_path.display());
 
-    let ctx = match prepare_restore(manifest_path, store_dir, output, force, jobs) {
+    let ctx = match prepare_restore(manifest_path, store_dir, output, force, jobs, identity) {
         Some(c) => c,
         None => return false,
     };
@@ -64,7 +67,7 @@ pub fn restore(
         return true;
     }
 
-    match restore_file(&ctx.manifest, &ctx.chunk_store, &ctx.output_path, ctx.jobs) {
+    match restore_file(&ctx.manifest, &*ctx.chunk_store, &ctx.output_path, ctx.jobs) {
         Ok(_) => {
             println!("Restore complete: {}", ctx.output_path.display());
             true
@@ -121,10 +124,23 @@ fn check_overwrite(path: &Path, force: bool) -> bool {
 
 fn open_chunk_store(
     store_dir: &Path,
-) -> Result<CompressedChunkStore<LocalChunkStore>, String> {
+    manifest: &Manifest,
+    identity: Option<&str>,
+) -> Result<Box<dyn ChunkStore>, String> {
     let chunks_dir = store_dir.join("chunks");
     let local_store = LocalChunkStore::new(chunks_dir).map_err(|e| e.to_string())?;
-    Ok(CompressedChunkStore::new(local_store))
+    let compressed = CompressedChunkStore::new(local_store);
+    if manifest.encryption.is_some() {
+        let identity_str = identity.ok_or_else(|| {
+            "Error: manifest is encrypted but no --identity provided".to_string()
+        })?;
+        let identity = age::x25519::Identity::from_str(identity_str)
+            .map_err(|e| format!("Invalid age identity: {e}"))?;
+        let recipient = identity.to_public();
+        Ok(Box::new(EncryptedChunkStore::new(compressed, recipient, identity)))
+    } else {
+        Ok(Box::new(compressed))
+    }
 }
 
 fn resolve_output_path(manifest_path: &Path) -> std::path::PathBuf {
@@ -201,4 +217,3 @@ fn create_progress_bar(total: u64) -> ProgressBar {
     );
     pb
 }
-
