@@ -64,6 +64,9 @@ pub fn validate_vm_id(vm_id: &str) -> Result<(), String> {
     if vm_id.contains("..") {
         return Err(format!("VM id must not contain '..': {vm_id:?}"));
     }
+    if !vm_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("VM id must be numeric, got {vm_id:?}"));
+    }
     Ok(())
 }
 
@@ -94,8 +97,7 @@ mod tests {
     fn valid_vm_ids_accepted() {
         assert!(validate_vm_id("100").is_ok());
         assert!(validate_vm_id("9999").is_ok());
-        assert!(validate_vm_id("my-vm").is_ok());
-        assert!(validate_vm_id("vm_01").is_ok());
+        assert!(validate_vm_id("0").is_ok());
     }
 
     #[test]

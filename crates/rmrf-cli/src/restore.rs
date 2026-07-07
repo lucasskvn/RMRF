@@ -100,6 +100,12 @@ fn is_empty_manifest(manifest: &Manifest, output_path: &Path) -> bool {
 }
 
 fn check_overwrite(path: &Path, force: bool) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if !force && (name == "null" || name == "zero") && path.parent().is_some_and(|p| p == std::path::Path::new("/dev")) {
+        eprintln!("Error: refusing to restore to special device: {}", path.display());
+        eprintln!("  (use --force to override)");
+        return false;
+    }
     if !path.exists() {
         return true;
     }
