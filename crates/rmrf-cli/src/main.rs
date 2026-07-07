@@ -52,6 +52,10 @@ enum Command {
         hypervisor: Hypervisor,
         #[arg(long)]
         encrypt: Option<String>,
+        #[arg(long)]
+        live: bool,
+        #[arg(long)]
+        qmp_socket: Option<PathBuf>,
     },
     Restore {
         manifest: PathBuf,
@@ -126,6 +130,8 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             no_suspend,
             hypervisor,
             encrypt,
+            live,
+            qmp_socket,
         } => handle_backup(
             path.as_deref(),
             store.as_deref().unwrap_or(&cfg.store),
@@ -138,6 +144,8 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             hypervisor,
             cfg,
             encrypt.as_deref(),
+            live,
+            qmp_socket.as_deref(),
         ),
         Command::Restore {
             manifest,
@@ -178,6 +186,8 @@ fn handle_backup(
     hypervisor: Hypervisor,
     cfg: &RmrfConfig,
     encrypt: Option<&str>,
+    live: bool,
+    qmp_socket: Option<&std::path::Path>,
 ) -> bool {
     let resolved_path;
     let path = match (path, &vm) {
@@ -202,8 +212,13 @@ fn handle_backup(
     };
 
     let disk_format = parse_disk_format(&format, path);
-    let lifecycle = if no_suspend {
-        Box::new(rmrf_source::NoopLifecycle) as Box<dyn rmrf_source::VmLifecycle>
+    let lifecycle: Box<dyn rmrf_source::VmLifecycle> = if live {
+        let socket = qmp_socket.map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("/var/run/qemu-server"));
+        let device = disk_name.as_deref().unwrap_or("scsi0");
+        Box::new(rmrf_source::QmpLifecycle::new(&socket, device))
+    } else if no_suspend {
+        Box::new(rmrf_source::NoopLifecycle)
     } else {
         hypervisor::build_vm_lifecycle(vm.as_deref(), &hypervisor)
     };

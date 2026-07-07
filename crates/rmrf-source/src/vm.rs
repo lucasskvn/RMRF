@@ -1,5 +1,7 @@
+use crate::qmp::QmpClient;
 use crate::FileSource;
 use rmrf_core::{DiskFormat, Source, SourceMetadata, SourceType};
+use std::cell::RefCell;
 use std::io;
 use std::path::Path;
 use std::process::Command;
@@ -7,6 +9,9 @@ use std::process::Command;
 pub trait VmLifecycle {
     fn suspend(&self, vm_id: &str) -> rmrf_core::Result<()>;
     fn resume(&self, vm_id: &str) -> rmrf_core::Result<()>;
+    fn snapshot_path(&self) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 impl VmLifecycle for Box<dyn VmLifecycle> {
@@ -15,6 +20,9 @@ impl VmLifecycle for Box<dyn VmLifecycle> {
     }
     fn resume(&self, vm_id: &str) -> rmrf_core::Result<()> {
         (**self).resume(vm_id)
+    }
+    fn snapshot_path(&self) -> Option<std::path::PathBuf> {
+        (**self).snapshot_path()
     }
 }
 
@@ -62,6 +70,38 @@ impl VmLifecycle for LibvirtLifecycle {
     }
 }
 
+pub struct QmpLifecycle {
+    socket_path: std::path::PathBuf,
+    device: String,
+    snapshot_path: RefCell<Option<std::path::PathBuf>>,
+}
+
+impl QmpLifecycle {
+    pub fn new(socket_path: &Path, device: &str) -> Self {
+        QmpLifecycle {
+            socket_path: socket_path.to_path_buf(),
+            device: device.to_string(),
+            snapshot_path: RefCell::new(None),
+        }
+    }
+}
+
+impl VmLifecycle for QmpLifecycle {
+    fn suspend(&self, _vm_id: &str) -> rmrf_core::Result<()> {
+        let mut client = QmpClient::connect(&self.socket_path)?;
+        let snap = std::path::PathBuf::from(format!("/tmp/rmrf-qmp-{}.snap", self.device));
+        client.create_snapshot(&self.device, &snap, "qcow2")?;
+        *self.snapshot_path.borrow_mut() = Some(snap);
+        Ok(())
+    }
+    fn resume(&self, _vm_id: &str) -> rmrf_core::Result<()> {
+        Ok(())
+    }
+    fn snapshot_path(&self) -> Option<std::path::PathBuf> {
+        self.snapshot_path.borrow().clone()
+    }
+}
+
 fn run_external(cmd: &str, action: &str, vm_id: &str) -> rmrf_core::Result<()> {
     let output = Command::new(cmd)
         .args([action, vm_id])
@@ -89,16 +129,22 @@ impl<L: VmLifecycle> VmSource<L> {
         format: DiskFormat,
         lifecycle: L,
     ) -> rmrf_core::Result<Self> {
-        if !path.exists() {
+        lifecycle.suspend(vm_id)?;
+
+        let source_path = match lifecycle.snapshot_path() {
+            Some(snap) => snap,
+            None => path.to_path_buf(),
+        };
+
+        if !source_path.exists() {
+            let _ = lifecycle.resume(vm_id);
             return Err(rmrf_core::RmrfError::Msg(format!(
                 "VM disk not found: {}",
-                path.display()
+                source_path.display()
             )));
         }
 
-        lifecycle.suspend(vm_id)?;
-
-        let source = FileSource::new(path).map_err(|e| {
+        let source = FileSource::new(&source_path).map_err(|e| {
             let _ = lifecycle.resume(vm_id);
             rmrf_core::RmrfError::Io(e)
         })?;

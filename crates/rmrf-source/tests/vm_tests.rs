@@ -134,6 +134,7 @@ fn vm_source_open_failure_after_suspend_resumes() {
 fn vm_source_file_not_found_before_suspend() {
     let lifecycle = MockLifecycle::new();
     let suspended = Rc::clone(&lifecycle.suspended);
+    let resume_calls = Rc::clone(&lifecycle.resume_calls);
     let result = VmSource::open(
         std::path::Path::new("/tmp/nonexistent_vm_disk_888"),
         "700",
@@ -143,6 +144,7 @@ fn vm_source_file_not_found_before_suspend() {
     );
     assert!(result.is_err());
     assert!(!*suspended.borrow());
+    assert_eq!(*resume_calls.borrow(), 1);
 }
 
 #[test]
