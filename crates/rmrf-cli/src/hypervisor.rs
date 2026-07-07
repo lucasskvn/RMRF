@@ -1,6 +1,7 @@
 use clap::ValueEnum;
 use rmrf_source::{
-    LibvirtLifecycle, NoopLifecycle, ProxmoxLifecycle, ProxmoxLxcLifecycle, VmLifecycle,
+    LibvirtLifecycle, NoopLifecycle, ProxmoxLifecycle, ProxmoxLxcLifecycle,
+    VmLifecycle,
 };
 use std::fmt;
 
@@ -46,7 +47,10 @@ pub fn detect_hypervisor(vm_id: &str) -> Hypervisor {
     Hypervisor::Noop
 }
 
-pub fn build_vm_lifecycle(vm_id: Option<&str>, hypervisor: &Hypervisor) -> Box<dyn VmLifecycle> {
+pub fn build_vm_lifecycle(
+    vm_id: Option<&str>,
+    hypervisor: &Hypervisor,
+) -> Box<dyn VmLifecycle> {
     let hv = match hypervisor {
         Hypervisor::Auto => {
             if let Some(id) = vm_id {

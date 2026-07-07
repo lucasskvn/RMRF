@@ -1,4 +1,6 @@
-use rmrf_core::{ChunkLocation, ChunkStore, Hash, Result as RmrfResult, RmrfError};
+use rmrf_core::{
+    ChunkLocation, ChunkStore, Hash, Result as RmrfResult, RmrfError,
+};
 use std::io::{Read, Write};
 use zstd::Encoder;
 
@@ -45,7 +47,9 @@ impl<S: ChunkStore> ChunkStore for CompressedChunkStore<S> {
 
     fn get(&self, hash: &Hash) -> RmrfResult<Option<Vec<u8>>> {
         match self.inner.get(hash)? {
-            Some(compressed_data) => Ok(Some(self.decompress(&compressed_data)?)),
+            Some(compressed_data) => {
+                Ok(Some(self.decompress(&compressed_data)?))
+            }
             None => Ok(None),
         }
     }

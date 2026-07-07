@@ -33,68 +33,43 @@ pub struct ProxmoxLifecycle;
 
 impl VmLifecycle for ProxmoxLifecycle {
     fn suspend(&self, vm_id: &str) -> rmrf_core::Result<()> {
-        run_qm("suspend", vm_id)
+        run_external("qm", "suspend", vm_id)
     }
     fn resume(&self, vm_id: &str) -> rmrf_core::Result<()> {
-        run_qm("resume", vm_id)
+        run_external("qm", "resume", vm_id)
     }
 }
-
-fn run_qm(action: &str, vm_id: &str) -> rmrf_core::Result<()> {
-    let output = Command::new("qm")
-        .args([action, vm_id])
-        .output()
-        .map_err(|e| rmrf_core::RmrfError::Msg(format!("qm {action}: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(rmrf_core::RmrfError::Msg(format!("qm {action}: {stderr}")));
-    }
-    Ok(())
-}
-
 
 pub struct ProxmoxLxcLifecycle;
 
 impl VmLifecycle for ProxmoxLxcLifecycle {
     fn suspend(&self, vm_id: &str) -> rmrf_core::Result<()> {
-        run_pct("suspend", vm_id)
+        run_external("pct", "suspend", vm_id)
     }
     fn resume(&self, vm_id: &str) -> rmrf_core::Result<()> {
-        run_pct("resume", vm_id)
+        run_external("pct", "resume", vm_id)
     }
-}
-
-fn run_pct(action: &str, vm_id: &str) -> rmrf_core::Result<()> {
-    let output = Command::new("pct")
-        .args([action, vm_id])
-        .output()
-        .map_err(|e| rmrf_core::RmrfError::Msg(format!("pct {action}: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(rmrf_core::RmrfError::Msg(format!("pct {action}: {stderr}")));
-    }
-    Ok(())
 }
 
 pub struct LibvirtLifecycle;
 
 impl VmLifecycle for LibvirtLifecycle {
     fn suspend(&self, vm_id: &str) -> rmrf_core::Result<()> {
-        run_virsh("suspend", vm_id)
+        run_external("virsh", "suspend", vm_id)
     }
     fn resume(&self, vm_id: &str) -> rmrf_core::Result<()> {
-        run_virsh("resume", vm_id)
+        run_external("virsh", "resume", vm_id)
     }
 }
 
-fn run_virsh(action: &str, vm_id: &str) -> rmrf_core::Result<()> {
-    let output = Command::new("virsh")
+fn run_external(cmd: &str, action: &str, vm_id: &str) -> rmrf_core::Result<()> {
+    let output = Command::new(cmd)
         .args([action, vm_id])
         .output()
-        .map_err(|e| rmrf_core::RmrfError::Msg(format!("virsh {action}: {e}")))?;
+        .map_err(|e| rmrf_core::RmrfError::Msg(format!("{cmd} {action}: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(rmrf_core::RmrfError::Msg(format!("virsh {action}: {stderr}")));
+        return Err(rmrf_core::RmrfError::Msg(format!("{cmd} {action}: {stderr}")));
     }
     Ok(())
 }

@@ -1,5 +1,3 @@
-use std::path::Path;
-
 pub fn format_size(bytes: u64) -> String {
     if bytes >= 1_073_741_824 {
         format!("{:.1} GiB", bytes as f64 / 1_073_741_824.0)
@@ -44,9 +42,4 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> i32 {
     let doy = (153 * (m + if m > 2 { 3 } else { 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146097 + doe as i32 - 719468
-}
-
-#[allow(dead_code)]
-pub fn join_display(path: &Path) -> String {
-    path.display().to_string()
 }

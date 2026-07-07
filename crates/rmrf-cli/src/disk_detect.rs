@@ -24,7 +24,8 @@ pub fn parse_disk_format(arg: &DiskFormatArg, path: &std::path::Path) -> DiskFor
     }
 }
 
-const QM_DISK_PREFIXES: &[&str] = &["scsi", "virtio", "ide", "sata", "efidisk", "tpmstate"];
+const QM_DISK_PREFIXES: &[&str] =
+    &["scsi", "virtio", "ide", "sata", "efidisk", "tpmstate"];
 const PCT_DISK_PREFIXES: &[&str] = &["rootfs", "mp"];
 
 pub fn detect_disk_path(
@@ -84,7 +85,8 @@ fn find_disk_from_config(
     }
     let best = candidates.into_iter()
         .min_by_key(|(name, _)| {
-            if name.starts_with("efidisk") || name.starts_with("tpmstate") { 1 } else { 0 }
+            if name.starts_with("efidisk")
+                || name.starts_with("tpmstate") { 1 } else { 0 }
         });
     resolve_pvesm_path(best.unwrap().1)
 }

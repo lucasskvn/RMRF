@@ -41,7 +41,12 @@ fn prepare_restore(
     Some(RestoreCtx { manifest, output_path, chunk_store })
 }
 
-pub fn restore(manifest_path: &Path, store_dir: &Path, output: Option<&Path>, force: bool) -> bool {
+pub fn restore(
+    manifest_path: &Path,
+    store_dir: &Path,
+    output: Option<&Path>,
+    force: bool,
+) -> bool {
     println!("Restore: {}", manifest_path.display());
 
     let ctx = match prepare_restore(manifest_path, store_dir, output, force) {
@@ -81,7 +86,10 @@ fn is_empty_manifest(manifest: &Manifest, output_path: &Path) -> bool {
     }
 }
 
-fn resolve_output_path_or_default(output: Option<&Path>, manifest_path: &Path) -> std::path::PathBuf {
+fn resolve_output_path_or_default(
+    output: Option<&Path>,
+    manifest_path: &Path,
+) -> std::path::PathBuf {
     output
         .map(Path::to_path_buf)
         .unwrap_or_else(|| resolve_output_path(manifest_path))
@@ -95,14 +103,19 @@ fn check_overwrite(path: &Path, force: bool) -> bool {
         return true;
     }
     if path.is_dir() || path.is_symlink() {
-        eprintln!("Error: output path is a directory or symlink: {} (use --force to overwrite)", path.display());
+        eprintln!("Error: output path is a directory or symlink: {}",
+            path.display());
+        eprintln!("  (use --force to overwrite)");
         return false;
     }
-    eprintln!("Error: output file already exists: {} (use --force to overwrite)", path.display());
+    eprintln!("Error: output file already exists: {} (use --force)",
+        path.display());
     false
 }
 
-fn open_chunk_store(store_dir: &Path) -> Result<CompressedChunkStore<LocalChunkStore>, String> {
+fn open_chunk_store(
+    store_dir: &Path,
+) -> Result<CompressedChunkStore<LocalChunkStore>, String> {
     let chunks_dir = store_dir.join("chunks");
     let local_store = LocalChunkStore::new(chunks_dir).map_err(|e| e.to_string())?;
     Ok(CompressedChunkStore::new(local_store))

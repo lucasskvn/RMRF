@@ -94,7 +94,8 @@ fn scan_prefix(
     if let Ok(inner_entries) = fs::read_dir(prefix.path()) {
         for inner in inner_entries.flatten() {
             let inner_name = inner.file_name().to_string_lossy().to_string();
-            try_delete_orphan(&inner, &inner_name, &name, referenced, dry_run, &mut stats);
+            try_delete_orphan(
+                &inner, &inner_name, &name, referenced, dry_run, &mut stats);
         }
     }
 

@@ -54,7 +54,10 @@ fn check_all_chunks(
     (total, missing)
 }
 
-fn check_chunk_exists(store: &CompressedChunkStore<LocalChunkStore>, hash: &Hash) -> bool {
+fn check_chunk_exists(
+    store: &CompressedChunkStore<LocalChunkStore>,
+    hash: &Hash,
+) -> bool {
     match store.exists(hash) {
         Ok(true) => true,
         Ok(false) => {

@@ -117,7 +117,12 @@ fn walk_files(dir: &Path) -> Result<Vec<std::path::PathBuf>, io::Error> {
     Ok(files)
 }
 
-fn backup_file(source: &Path, store_dir: &Path, timestamp: &str, label: &str) -> Option<BackupStats> {
+fn backup_file(
+    source: &Path,
+    store_dir: &Path,
+    timestamp: &str,
+    label: &str,
+) -> Option<BackupStats> {
     println!("Backup: {}", source.display());
 
     let mut file_source = match FileSource::new(source) {

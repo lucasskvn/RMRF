@@ -154,7 +154,10 @@ fn process_chunk(
         Ok(location) => {
             let compressed_raw = match chunk_store.get_raw(hash) {
                 Ok(d) => d,
-                Err(e) => return ProcessResult::Error(format!("Failed to get compressed size: {e}")),
+                Err(e) => {
+                    return ProcessResult::Error(
+                        format!("Failed to get compressed size: {e}"));
+                }
             };
             let compressed_size = compressed_raw
                 .map(|d| d.len() as u32)
@@ -222,7 +225,8 @@ fn save_manifest(
 fn create_backup_spinner() -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
-        ProgressStyle::with_template("{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
+        ProgressStyle::with_template(
+            "{spinner} Chunks: {pos} | Bytes: {bytes} | Dedup: {msg}")
             .unwrap_or_else(|_| ProgressStyle::default_spinner())
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈"),
     );

@@ -69,7 +69,10 @@ fn remove_old_manifests(
     deleted
 }
 
-fn decref_manifest(path: &Path, dedup_index: &mut PersistentDedupIndex) -> bool {
+fn decref_manifest(
+    path: &Path,
+    dedup_index: &mut PersistentDedupIndex,
+) -> bool {
     let Ok(m) = Manifest::load(path) else {
         return false;
     };
