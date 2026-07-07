@@ -3,6 +3,7 @@ mod commands;
 mod disk_detect;
 mod hypervisor;
 mod lock;
+mod pipeline;
 mod restore;
 
 use clap::{Parser, Subcommand};
