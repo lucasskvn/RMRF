@@ -1,5 +1,5 @@
 use rmrf_core::{ChunkLocation, DedupIndex};
-use rmrf_store::{MemoryDedupIndex, PersistentDedupIndex};
+use rmrf_store::PersistentDedupIndex;
 
 fn make_hash(val: u8) -> [u8; 32] {
     let mut h = [0u8; 32];
@@ -12,54 +12,6 @@ fn make_location() -> ChunkLocation {
         prefix: "ab".into(),
         filename: "cd.zst".into(),
     }
-}
-
-#[test]
-fn memory_index_insert_and_lookup() {
-    let mut idx = MemoryDedupIndex::new();
-    let hash = make_hash(1);
-    let loc = make_location();
-    idx.insert(&hash, loc, 100, 50).unwrap();
-    let entry = idx.lookup(&hash).unwrap().unwrap();
-    assert_eq!(entry.location.prefix, "ab");
-    assert_eq!(entry.refcount, 1);
-    assert_eq!(entry.uncompressed_size, 100);
-}
-
-#[test]
-fn memory_index_increment_refcount() {
-    let mut idx = MemoryDedupIndex::new();
-    let hash = make_hash(2);
-    let loc = make_location();
-    idx.insert(&hash, loc, 100, 100).unwrap();
-    idx.increment_refcount(&hash).unwrap();
-    let entry = idx.lookup(&hash).unwrap().unwrap();
-    assert_eq!(entry.refcount, 2);
-}
-
-#[test]
-fn memory_index_decrement_refcount() {
-    let mut idx = MemoryDedupIndex::new();
-    let hash = make_hash(3);
-    let loc = make_location();
-    idx.insert(&hash, loc, 100, 100).unwrap();
-    let remaining = idx.decrement_refcount(&hash).unwrap();
-    assert_eq!(remaining, 0);
-}
-
-#[test]
-fn memory_index_decrement_missing_returns_zero() {
-    let mut idx = MemoryDedupIndex::new();
-    let hash = make_hash(99);
-    let remaining = idx.decrement_refcount(&hash).unwrap();
-    assert_eq!(remaining, 0);
-}
-
-#[test]
-fn memory_index_lookup_missing() {
-    let idx = MemoryDedupIndex::new();
-    let hash = make_hash(4);
-    assert!(idx.lookup(&hash).unwrap().is_none());
 }
 
 #[test]

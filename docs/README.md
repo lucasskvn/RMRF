@@ -7,7 +7,7 @@ A fast, efficient backup system for files and VMs with automatic compression and
 - 📦 Backup files, directories, VM disks
 - 💾 Support for Proxmox, KVM, Libvirt
 - 🗜️ Zstd compression (4-10x reduction)
-- 🔗 SHA256-based deduplication
+- 🔗 BLAKE3-based deduplication
 - ⚡ FastCDC chunking
 - 🔍 Integrity verification
 - 🧹 Garbage collection
