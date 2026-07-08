@@ -187,6 +187,44 @@ fn restore_restores_modification_time() {
 }
 
 #[test]
+fn restore_restores_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let store = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    let src = work.path().join("perms.bin");
+    fs::write(&src, b"permissions test data").unwrap();
+    fs::set_permissions(&src, fs::Permissions::from_mode(0o600)).unwrap();
+
+    rmrf()
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let manifest = one_manifest(store.path());
+    let out = work.path().join("restored_perms");
+    rmrf()
+        .args([
+            "restore",
+            manifest.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--force",
+        ])
+        .assert()
+        .success();
+
+    let mode = fs::metadata(&out).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "restored file must keep original permissions");
+}
+
+#[test]
 fn verify_encrypted_backup_with_identity() {
     let store = TempDir::new().unwrap();
     let work = TempDir::new().unwrap();

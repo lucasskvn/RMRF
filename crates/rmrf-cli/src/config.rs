@@ -1,15 +1,14 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)]
 pub struct Job {
     pub name: String,
     #[serde(default)]
     pub path: Option<PathBuf>,
     #[serde(default)]
     pub vm: Option<String>,
-    pub schedule: String,
     #[serde(default)]
     pub retain: Option<u64>,
     #[serde(default)]
@@ -71,17 +70,6 @@ impl Default for RmrfConfig {
     }
 }
 
-pub fn parse_cron_schedule(schedule: &str) -> Result<cron::Schedule, String> {
-    let fields: Vec<&str> = schedule.split_whitespace().collect();
-    let normalized = if fields.len() == 5 {
-        format!("0 {schedule}")
-    } else {
-        schedule.to_string()
-    };
-    cron::Schedule::from_str(&normalized)
-        .map_err(|e| format!("invalid cron schedule {schedule:?}: {e}"))
-}
-
 pub fn validate_job_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("job name is empty".into());
@@ -116,7 +104,6 @@ impl RmrfConfig {
         }
         for job in &self.jobs {
             validate_job_name(&job.name)?;
-            parse_cron_schedule(&job.schedule)?;
         }
         Ok(())
     }

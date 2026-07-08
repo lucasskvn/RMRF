@@ -7,7 +7,7 @@ use std::path::Path;
 use super::gc::gc;
 use super::helpers::parse_timestamp;
 
-pub fn run_retention_and_gc(store_dir: &Path, days: u64) -> bool {
+pub fn run_retention_and_gc(store_dir: &Path, days: u64, dry_run: bool) -> bool {
     let now = chrono::Utc::now().timestamp();
     let cutoff = now - (days as i64) * 86400;
 
@@ -20,7 +20,16 @@ pub fn run_retention_and_gc(store_dir: &Path, days: u64) -> bool {
         }
     };
 
-    let deleted = remove_old_manifests(store_dir, cutoff, &mut dedup_index);
+    let deleted = remove_old_manifests(store_dir, cutoff, &mut dedup_index, dry_run);
+
+    if dry_run {
+        if deleted > 0 {
+            println!("Dry run: would remove {deleted} manifest(s) older than {days} day(s)");
+        } else {
+            println!("Dry run: no manifests older than {days} day(s)");
+        }
+        return true;
+    }
 
     if deleted > 0 {
         if let Err(e) = dedup_index.save() {
@@ -38,6 +47,7 @@ fn remove_old_manifests(
     store_dir: &Path,
     cutoff: i64,
     dedup_index: &mut PersistentDedupIndex,
+    dry_run: bool,
 ) -> u64 {
     let manifests_dir = store_dir.join("manifests");
     let mut deleted = 0u64;
@@ -61,6 +71,11 @@ fn remove_old_manifests(
             continue;
         };
         if ts > cutoff {
+            continue;
+        }
+        if dry_run {
+            println!("Would remove manifest: {}", path.display());
+            deleted += 1;
             continue;
         }
         if decref_manifest(&path, dedup_index) {

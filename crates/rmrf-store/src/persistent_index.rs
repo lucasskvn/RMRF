@@ -1,17 +1,3 @@
-// PersistentDedupIndex: in-memory HashMap persisted via bincode.
-//
-// Behavior: the entire index is kept in memory (HashMap<String, IndexEntry>) and
-// serialized to disk with bincode on every save(). Each save() rewrites the whole
-// file atomically (write to .tmp -> fsync -> rename -> parent fsync). There is no
-// incremental write: the cost is O(n) in the number of unique chunks, and new()
-// also loads the full index into memory.
-//
-// This is an acceptable trade-off for V1 (personal use, reasonable volumes): the
-// implementation is simple, atomic, and has no external dependency. It should be
-// revisited if the project ever needs to handle large-scale VM backup volumes — a
-// transactional KV store (e.g. redb, sled, or SQLite) with per-entry persistence
-// and incremental writes would be a better fit at that scale.
-
 use rmrf_core::{ChunkLocation, DedupIndex, Hash, IndexEntry, Result as RmrfResult, RmrfError};
 use std::collections::HashMap;
 use std::fs;

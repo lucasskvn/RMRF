@@ -74,7 +74,18 @@ pub fn build_vm_lifecycle(vm_id: Option<&str>, hypervisor: &Hypervisor) -> Box<d
     let hv = match hypervisor {
         Hypervisor::Auto => {
             if let Some(id) = vm_id {
-                detect_hypervisor(id)
+                let detected = detect_hypervisor(id);
+                if matches!(detected, Hypervisor::Noop) {
+                    eprintln!(
+                        "Warning: no hypervisor detected for VM {id}: \
+                         neither `qm`, `pct`, nor `virsh` found in PATH.\n  \
+                         - On Proxmox: ensure qm/pct are installed and you have permissions.\n  \
+                         - On libvirt/KVM: ensure virsh is installed and your user is in the \
+                         `libvirt` group.\n  \
+                         - To skip VM suspend/resume, use --no-suspend."
+                    );
+                }
+                detected
             } else {
                 Hypervisor::Noop
             }

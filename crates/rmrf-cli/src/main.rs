@@ -1,8 +1,6 @@
 mod backup;
 mod commands;
 mod config;
-mod cron;
-mod daemon;
 mod disk_detect;
 mod hypervisor;
 mod lock;
@@ -110,14 +108,14 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    #[command(about = "Generate crontab entries for scheduled backups")]
-    Cron,
-    #[command(about = "Run the backup daemon (scheduler)")]
-    Daemon {
+    #[command(about = "Remove manifests older than N days")]
+    Retention {
+        #[arg(short, long)]
+        store: Option<PathBuf>,
         #[arg(long)]
-        once: bool,
+        days: u64,
         #[arg(long)]
-        job: Option<String>,
+        dry_run: bool,
     },
 }
 
@@ -153,7 +151,8 @@ fn store_for_command<'a>(command: &'a Command, cfg: &'a RmrfConfig) -> &'a Path 
         Command::Info { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Verify { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Gc { store, .. } => store.as_deref().unwrap_or(&cfg.store),
-        Command::Cron | Command::Daemon { .. } => &cfg.store,
+        Command::Retention { store, .. } => store.as_deref().unwrap_or(&cfg.store),
+
     }
 }
 
@@ -252,8 +251,15 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
         Command::Gc { store, dry_run } => {
             handle_gc(store.as_deref().unwrap_or(&cfg.store), dry_run)
         }
-        Command::Cron => handle_cron(cfg),
-        Command::Daemon { once, job } => daemon::run_daemon(once, job.as_deref(), cfg),
+        Command::Retention {
+            store,
+            days,
+            dry_run,
+        } => commands::run_retention_and_gc(
+            store.as_deref().unwrap_or(&cfg.store),
+            days,
+            dry_run,
+        ),
     }
 }
 
@@ -268,17 +274,6 @@ fn handle_gc(store: &Path, dry_run: bool) -> bool {
     let ok = commands::gc(store, dry_run);
     unlock_store(store);
     ok
-}
-
-fn handle_cron(cfg: &RmrfConfig) -> bool {
-    let binary = std::env::current_exe().unwrap_or_else(|_| "rmrf".into());
-    let out = cron::generate_crontab(&cfg.jobs, &binary);
-    if out.is_empty() {
-        println!("No scheduled jobs configured in ~/.rmrf.toml");
-    } else {
-        print!("{out}");
-    }
-    true
 }
 
 fn resolve_backup_path(path: Option<&Path>, vm: &Option<String>, disk: Option<&str>, disk_name: &Option<String>) -> Result<(std::path::PathBuf, String), String> {
@@ -340,7 +335,7 @@ fn run_backup_with_lock(path: &Path, store: &Path, vm: &Option<String>, disk_nam
         return false;
     }
     if let Some(days) = retain {
-        let ok = commands::run_retention_and_gc(store, days);
+        let ok = commands::run_retention_and_gc(store, days, false);
         unlock_store(store);
         ok
     } else {

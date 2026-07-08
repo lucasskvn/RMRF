@@ -12,8 +12,7 @@ Complete reference for all RMRF commands with practical examples.
 | `info` | Show detailed backup metadata |
 | `verify` | Check backup integrity (all chunks exist) |
 | `gc` | Garbage collect orphan chunks |
-| `cron` | Generate crontab entries for scheduling |
-| `daemon` | Run background scheduler |
+| `retention` | Remove manifests older than N days |
 
 ---
 
@@ -246,67 +245,128 @@ du -sh ./my-store
 
 ---
 
-## CRON Command
+## RETENTION Command
 
-Generate crontab entries for scheduling.
+Remove old backups.
 
-### Generate Crontab
+### Remove Manifests Older Than N Days
 ```bash
-rmrf cron > /tmp/rmrf-cron.txt
-cat /tmp/rmrf-cron.txt
+rmrf retention -s ./my-store --days 30
 ```
 
-Output (from `~/.rmrf.toml` jobs):
+Output:
 ```
-# RMRF scheduled jobs
-# RMRF: daily-docs
-0 1 * * * /usr/local/bin/rmrf daemon --once --job daily-docs
-
-# RMRF: weekly-vm
-0 0 * * 0 /usr/local/bin/rmrf daemon --once --job weekly-vm
+Deleted 5 manifests older than 30 days
 ```
 
-### Install to Crontab
+### Dry Run (Preview Only)
 ```bash
-rmrf cron | crontab -
+rmrf retention -s ./my-store --days 30 --dry-run
+```
+
+Output:
+```
+Dry run: would delete 5 manifests older than 30 days
+```
+
+### Retention + GC
+```bash
+rmrf retention -s ./my-store --days 30
+rmrf gc -s ./my-store
 ```
 
 ---
 
-## DAEMON Command
+## Scheduling
 
-Run scheduler in background.
+RMRF does not include a built-in scheduler. Use systemd timers or cron.
 
-### Run Once (Test)
-```bash
-rmrf daemon --once
-```
+### systemd Service + Timer
 
-Executes all jobs from `~/.rmrf.toml` once.
-
-### Run Specific Job
-```bash
-rmrf daemon --once --job daily-docs
-```
-
-Executes only the "daily-docs" job.
-
-### Run as Service
-```bash
-# For systemd, create /etc/systemd/system/rmrf-daemon.service
+**Service unit** (`/etc/systemd/system/rmrf-backup.service`):
+```ini
 [Unit]
-Description=RMRF Backup Daemon
-After=network.target
+Description=RMRF backup
 
 [Service]
-Type=simple
-User=root
-ExecStart=/usr/local/bin/rmrf daemon
-Restart=always
+Type=oneshot
+ExecStart=/usr/local/bin/rmrf backup /path/to/data -s ./store
+```
+
+**Timer unit** (`/etc/systemd/system/rmrf-backup.timer`):
+```ini
+[Unit]
+Description=Daily RMRF backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=timers.target
 ```
+
+Enable and start:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable rmrf-backup.timer
+sudo systemctl start rmrf-backup.timer
+```
+
+### Cron
+
+```bash
+# Daily backup at 2 AM
+0 2 * * * /usr/local/bin/rmrf backup /path/to/data -s ./store
+
+# Weekly VM backup (Sunday midnight)
+0 0 * * 0 /usr/local/bin/rmrf backup /var/lib/vz/images/100/vm-100-disk-0.qcow2 -s ./vm-store --vm 100
+
+# Retention + GC every Sunday at 3 AM
+0 3 * * 0 rmrf retention -s ./store --days 30 && rmrf gc -s ./store
+```
+
+---
+
+## Hypervisor Support
+
+RMRF can suspend VMs before backup for consistent snapshots.
+
+### Proxmox (QEMU)
+```bash
+rmrf backup /var/lib/vz/images/100/vm-100-disk-0.qcow2 -s ./store --vm 100
+```
+
+Uses `qm suspend` / `qm resume`. The VM ID is extracted from the disk path.
+
+### Proxmox (LXC)
+```bash
+rmrf backup /var/lib/vz/images/201/vm-201-disk-0.raw -s ./store --vm 201
+```
+
+Uses `pct suspend` / `pct resume`.
+
+### Libvirt
+```bash
+rmrf backup /var/lib/libvirt/images/ubuntu.qcow2 -s ./store --vm ubuntu-vm --hypervisor libvirt
+```
+
+Uses `virsh suspend` / `virsh resume`.
+
+### Skip VM Suspension
+```bash
+rmrf backup /path/to/disk.qcow2 -s ./store --vm 100 --no-suspend
+```
+
+Useful when the VM is already stopped or you want a crash-consistent backup.
+
+### Auto-Detection
+When `--hypervisor` is omitted, RMRF auto-detects by checking available tools:
+- `qm` → Proxmox QEMU
+- `pct` → Proxmox LXC
+- `virsh` → Libvirt
+
+If none are found, backup proceeds without suspension (Noop lifecycle).
 
 ---
 
@@ -353,18 +413,27 @@ rmrf list -s ./store
 
 ### Automated Backups
 ```bash
-# ~/.rmrf.toml
-[[jobs]]
-name = "nightly"
-path = "/home/user/important"
-schedule = "0 2 * * *"
-retain = 30
+# systemd timer (recommended)
+# /etc/systemd/system/rmrf-backup.service
+[Unit]
+Description=RMRF backup
 
-# Install to cron
-rmrf cron | crontab -
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/rmrf backup /home/user/important -s ./store --retain 30
 
-# Verify
-crontab -l | grep rmrf
+# /etc/systemd/system/rmrf-backup.timer
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+# Enable
+sudo systemctl enable rmrf-backup.timer
+sudo systemctl start rmrf-backup.timer
+
+# Or with cron
+# crontab -e
+0 2 * * * /usr/local/bin/rmrf backup /home/user/important -s ./store --retain 30
 ```
 
 ---

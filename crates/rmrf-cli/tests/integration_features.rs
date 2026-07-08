@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::fs;
 use tempfile::TempDir;
 
 fn rmrf() -> Command {
@@ -235,23 +236,44 @@ fn gc_dry_run_after_backup() {
 }
 
 #[test]
-fn cron_command_output() {
-    let cfg_dir = TempDir::new().unwrap();
-    let cfg = write_config(
-        cfg_dir.path(),
-        r#"
-        [[jobs]]
-        name = "test-job"
-        path = "/tmp/test"
-        schedule = "0 3 * * *"
-        retain = 30
-    "#,
-    );
+fn retention_dry_run_lists_without_deleting() {
+    let store = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    let src = work.path().join("retain_dry.bin");
+    fs::write(&src, b"retention dry-run test").unwrap();
 
     rmrf()
-        .args(["--config", cfg.to_str().unwrap(), "cron"])
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let manifest_count_before = fs::read_dir(store.path().join("manifests"))
+        .unwrap()
+        .count();
+
+    rmrf()
+        .args([
+            "retention",
+            "-s",
+            store.path().to_str().unwrap(),
+            "--days",
+            "36500",
+            "--dry-run",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("test-job"))
-        .stdout(predicate::str::contains("0 3 * * *"));
+        .stdout(predicate::str::contains("Dry run: no manifests"));
+
+    let manifest_count_after = fs::read_dir(store.path().join("manifests"))
+        .unwrap()
+        .count();
+    assert_eq!(
+        manifest_count_before, manifest_count_after,
+        "dry-run must not delete manifests"
+    );
 }
