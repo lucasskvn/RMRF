@@ -457,6 +457,8 @@ rmrf backup /var/lib/libvirt/images/ubuntu.qcow2 -s ./store --vm ubuntu-vm --hyp
 
 Uses `virsh suspend` / `virsh resume`.
 
+> **Note:** libvirt/KVM support is implemented but has **not been validated** on real hardware (no test machine available). Proxmox QEMU and LXC have been validated. Use libvirt with caution and verify your restore workflow.
+
 ### Skip VM Suspension
 ```bash
 rmrf backup /path/to/disk.qcow2 -s ./store --vm 100 --no-suspend
