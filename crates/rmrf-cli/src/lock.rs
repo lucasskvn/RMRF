@@ -4,6 +4,12 @@ use std::path::Path;
 
 const STORE_LOCK: &str = ".rmrf.lock";
 
+pub enum SentinelCheckResult {
+    Clean,
+    Recovered,
+    Failed,
+}
+
 pub fn try_lock_store(store: &Path) -> bool {
     if let Err(e) = std::fs::create_dir_all(store) {
         eprintln!("Error: cannot create store directory: {e}");
@@ -69,27 +75,48 @@ pub fn store_sentinel_path(store: &Path, vm_id: &str) -> std::path::PathBuf {
     store.join(format!(".suspended-{vm_id}"))
 }
 
-pub fn check_stale_sentinels(store: &Path) {
+pub fn check_stale_sentinels(store: &Path) -> SentinelCheckResult {
     if !store.exists() {
-        return;
+        return SentinelCheckResult::Clean;
     }
+
+    let lock_path = store.join(STORE_LOCK);
+    if let Ok(pid_str) = std::fs::read_to_string(&lock_path) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            if Path::new(&format!("/proc/{pid}")).exists() {
+                return SentinelCheckResult::Clean;
+            }
+        }
+    }
+
+    let mut found_any = false;
+    let mut any_failed = false;
     if let Ok(dir) = std::fs::read_dir(store) {
         for entry in dir.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
             if let Some(vm_id) = name_str.strip_prefix(".suspended-") {
+                found_any = true;
                 eprintln!(
                     "Warning: found stale sentinel for VM {vm_id} — attempting auto-resume"
                 );
-                let resumed = try_auto_resume(vm_id);
-                if resumed {
+                if try_auto_resume(vm_id) {
                     eprintln!("  VM {vm_id} resumed successfully, removing sentinel");
                     std::fs::remove_file(entry.path()).ok();
                 } else {
                     eprintln!("  Could not auto-resume VM {vm_id} — check manually: qm status {vm_id} | pct status {vm_id}");
+                    any_failed = true;
                 }
             }
         }
+    }
+
+    if !found_any {
+        SentinelCheckResult::Clean
+    } else if any_failed {
+        SentinelCheckResult::Failed
+    } else {
+        SentinelCheckResult::Recovered
     }
 }
 

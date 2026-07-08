@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use config::RmrfConfig;
 use disk_detect::{parse_disk_format, DiskFormatArg};
 use hypervisor::{validate_vm_id, Hypervisor};
-use lock::{check_stale_sentinels, store_sentinel_path, try_lock_store, unlock_store};
+use lock::{check_stale_sentinels, store_sentinel_path, try_lock_store, unlock_store, SentinelCheckResult};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -117,6 +117,11 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    #[command(about = "Check for stale VM sentinels and auto-resume suspended VMs")]
+    Check {
+        #[arg(short, long)]
+        store: Option<PathBuf>,
+    },
 }
 
 fn main() {
@@ -135,7 +140,9 @@ fn main() {
     };
 
     let store = store_for_command(&cli.command, &cfg);
-    check_stale_sentinels(store);
+    if !matches!(cli.command, Command::Check { .. }) {
+        check_stale_sentinels(store);
+    }
 
     let ok = dispatch_command(cli.command, &cfg);
     if !ok {
@@ -152,7 +159,7 @@ fn store_for_command<'a>(command: &'a Command, cfg: &'a RmrfConfig) -> &'a Path 
         Command::Verify { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Gc { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Retention { store, .. } => store.as_deref().unwrap_or(&cfg.store),
-
+        Command::Check { store, .. } => store.as_deref().unwrap_or(&cfg.store),
     }
 }
 
@@ -260,6 +267,10 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             days,
             dry_run,
         ),
+        Command::Check { store } => {
+            let result = check_stale_sentinels(store.as_deref().unwrap_or(&cfg.store));
+            matches!(result, SentinelCheckResult::Clean | SentinelCheckResult::Recovered)
+        }
     }
 }
 
