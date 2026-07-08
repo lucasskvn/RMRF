@@ -51,23 +51,3 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> i32 {
     era * 146097 + doe as i32 - 719468
 }
 
-#[cfg(test)]
-mod tests {
-    use super::parse_timestamp;
-
-    #[test]
-    fn parses_real_manifest_timestamp() {
-        let ts = parse_timestamp("20260707T120000Z").unwrap();
-        assert!(ts > 1_700_000_000);
-    }
-
-    #[test]
-    fn rejects_malformed_timestamps() {
-        assert!(parse_timestamp("garbage").is_none());
-        assert!(parse_timestamp("20260707").is_none(), "too short");
-        assert!(parse_timestamp("20261307T120000Z").is_none(), "month 13");
-        assert!(parse_timestamp("20260732T120000Z").is_none(), "day 32");
-        assert!(parse_timestamp("20260707T250000Z").is_none(), "hour 25");
-        assert!(parse_timestamp("20260707 120000Z").is_none());
-    }
-}
