@@ -12,6 +12,7 @@ Complete reference for all RMRF commands with practical examples.
 | `info` | Show detailed backup metadata |
 | `verify` | Check backup integrity (all chunks exist) |
 | `gc` | Garbage collect orphan chunks |
+| `check` | Check for stale VM sentinels and auto-resume suspended VMs |
 | `retention` | Remove manifests older than N days |
 
 ---
@@ -274,6 +275,109 @@ Dry run: would delete 5 manifests older than 30 days
 rmrf retention -s ./my-store --days 30
 rmrf gc -s ./my-store
 ```
+
+---
+
+## CHECK Command
+
+Check for stale VM sentinels and auto-resume suspended VMs.
+
+When a backup is interrupted by SIGKILL (or a crash), the VM may remain suspended
+and a sentinel file (`.suspended-<vmid>`) is left in the store. This command
+detects and recovers from that state.
+
+### Basic Check
+```bash
+rmrf check -s ./vm-store
+```
+
+**No output** if everything is clean (no sentinels found). Exit code 0.
+
+**With stale sentinel:**
+```
+Warning: found stale sentinel for VM 103 — attempting auto-resume
+  VM 103 resumed successfully, removing sentinel
+```
+
+Exit code 0 on success, non-zero if a VM could not be resumed.
+
+### Safety Guard
+If a backup is currently running (store lock held by a live process), `check`
+skips the scan entirely — sentinels are legitimate during an active backup.
+
+### Scheduling with systemd Timer
+
+Run `rmrf check` every 1-5 minutes to minimise the window between a crash and
+automatic recovery.
+
+**Service unit** (`/etc/systemd/system/rmrf-check.service`):
+```ini
+[Unit]
+Description=RMRF sentinel check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/rmrf check -s /path/to/store
+```
+
+**Timer unit** (`/etc/systemd/system/rmrf-check.timer`):
+```ini
+[Unit]
+Description=RMRF sentinel check every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable and start:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable rmrf-check.timer
+sudo systemctl start rmrf-check.timer
+```
+
+> **Note:** There is a residual risk window between the crash and the next
+> `rmrf check` run (1-5 minutes with the timer above). The VM remains suspended
+> during this window. This is not instantaneous recovery.
+
+### Manual Recovery
+
+If `rmrf check` fails or you need to recover immediately:
+
+1. **Identify the sentinel:**
+   ```bash
+   ls -la /path/to/store/.suspended-*
+   ```
+   The file name contains the VM ID (e.g. `.suspended-103`).
+
+2. **Check VM state:**
+   ```bash
+   qm status 103
+   # or for LXC:
+   pct status 201
+   ```
+
+3. **Resume the VM manually:**
+   ```bash
+   qm resume 103
+   # or for LXC:
+   pct resume 201
+   ```
+
+4. **Remove the sentinel:**
+   ```bash
+   rm /path/to/store/.suspended-103
+   ```
+
+5. **Verify:**
+   ```bash
+   qm status 103
+   # Should show "running"
+   ```
 
 ---
 

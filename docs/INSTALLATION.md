@@ -175,25 +175,13 @@ compression_level = 10
 cdc_min = 4096
 cdc_avg = 16384
 cdc_max = 65536
-
-[[jobs]]
-name = "daily-docs"
-path = "/home/user/Documents"
-schedule = "0 1 * * *"
-retain = 30
-
-[[jobs]]
-name = "weekly-vm"
-vm = "100"
-schedule = "0 0 * * 0"
-retain = 90
 ```
 
 ## Next Steps
 
 1. **First backup**: See [USAGE.md](USAGE.md) for examples
 2. **VM setup**: If backing up VMs, configure Proxmox/Libvirt access
-3. **Automation**: Set up cron jobs or daemon mode
+3. **Automation**: Set up systemd timers or cron jobs
 4. **Monitoring**: Use `list` and `verify` commands
 
 ## Help

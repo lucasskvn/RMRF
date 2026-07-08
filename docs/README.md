@@ -7,21 +7,20 @@ A fast, efficient, and modular backup system for VMs and files with automatic co
 - 📦 **Backup** files, directories, VM disks
 - 💾 **Support** for Proxmox, KVM, Libvirt
 - 🗜️ **Zstd compression** (4-10x reduction)
-- 🔗 **SHA256-based deduplication**
+- 🔗 **BLAKE3-based deduplication**
 - ⚡ **FastCDC chunking** (content-defined)
 - 🔐 **AGE encryption** (X25519)
-- ⚙️ **Daemon mode** with scheduling
+- ⏰ **Systemd/cron scheduling**
 - 🔍 **Verify** backup integrity
 - 🧹 **Garbage collection** for orphan chunks
 
 ## 📊 Quick Stats
 
 ```
-Lines of Code:      5,594 (Rust)
-Tests:              103+ passing
+Tests:              92+ passing
 Binary Size:        2.7 MB (release)
 Crates:             5 (modular)
-Commands:           8 (backup, restore, list, info, verify, gc, cron, daemon)
+Commands:           8 (backup, restore, list, info, verify, gc, retention, check)
 Code Quality:       0 Clippy warnings
 ```
 
@@ -63,20 +62,18 @@ manifest=$(find ./store/manifests -name "*.bincode" | head -1)
 ## 🏗️ Architecture
 
 **5 Modular Crates:**
-- **rmrf-core** - Types & traits (85 lines)
-- **rmrf-manifest** - Backup metadata (60 lines)
-- **rmrf-source** - File & VM sources (361 lines)
-- **rmrf-store** - Chunk storage & compression (368 lines)
-- **rmrf-cli** - User interface (2,912 lines)
+- **rmrf-core** - Types & traits
+- **rmrf-manifest** - Backup metadata
+- **rmrf-source** - File & VM sources
+- **rmrf-store** - Chunk storage & compression
+- **rmrf-cli** - User interface
 
 ## 🔐 Advanced Features
 
 ✅ **Encryption** - AGE X25519 transparent wrapper
-✅ **Configuration** - TOML ~/.rmrf.toml with jobs
-✅ **Daemon Mode** - Background scheduling (182 lines)
-✅ **Cron Support** - Auto-generated crontab entries
+✅ **Configuration** - TOML ~/.rmrf.toml
 ✅ **Signal Handling** - SIGTERM/SIGINT graceful shutdown
-✅ **QMP Client** - QEMU Machine Protocol support
+✅ **VM Suspension** - Proxmox QEMU/LXC, Libvirt
 
 ## 🧪 Testing
 
@@ -108,7 +105,7 @@ cargo clippy --release
 - ✅ Compression & deduplication
 - ✅ Encryption support
 - ✅ Configuration & scheduling
-- ✅ 103+ tests passing
+- ✅ 92+ tests passing
 - ✅ Zero warnings
 
 ## 🔧 Technology Stack
@@ -127,7 +124,6 @@ cargo clippy --release
 - Remote storage backends (S3, Azure)
 - Web dashboard
 - Bandwidth limiting
-- Advanced scheduling
 
 ---
 
