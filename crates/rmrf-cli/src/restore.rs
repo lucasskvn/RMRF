@@ -140,8 +140,7 @@ pub(crate) fn open_chunk_store(
             .ok_or_else(|| "Error: manifest is encrypted but no --identity provided".to_string())?;
         let identity_str = std::fs::read_to_string(identity_path)
             .map_err(|e| format!("Error reading identity file: {e}"))?;
-        let identity = age::x25519::Identity::from_str(identity_str.trim())
-            .map_err(|e| format!("Invalid age identity: {e}"))?;
+        let identity = parse_age_identity(&identity_str, std::path::Path::new(identity_path))?;
         let recipient = identity.to_public();
         Ok(Box::new(EncryptedChunkStore::new(
             compressed, recipient, identity,
@@ -149,6 +148,23 @@ pub(crate) fn open_chunk_store(
     } else {
         Ok(Box::new(compressed))
     }
+}
+
+fn parse_age_identity(content: &str, path: &std::path::Path) -> Result<age::x25519::Identity, String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with("AGE-SECRET-KEY-") {
+            return age::x25519::Identity::from_str(trimmed)
+                .map_err(|e| format!("Invalid age identity in {}: {e}", path.display()));
+        }
+    }
+    Err(format!(
+        "No valid age key found in {} — expected a line starting with AGE-SECRET-KEY-",
+        path.display()
+    ))
 }
 
 pub fn restore_file(

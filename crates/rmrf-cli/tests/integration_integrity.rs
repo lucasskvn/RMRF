@@ -284,3 +284,115 @@ fn verify_encrypted_backup_with_identity() {
         .success();
     assert_eq!(fs::read(&src).unwrap(), fs::read(&out).unwrap());
 }
+
+#[test]
+fn encrypted_backup_with_raw_age_keygen_format() {
+    let store = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    let src = work.path().join("secret.bin");
+    fs::write(&src, b"age-keygen raw format test").unwrap();
+
+    let identity = age::x25519::Identity::generate();
+    let recipient = identity.to_public();
+    let identity_file = work.path().join("age.key");
+    let pubkey = recipient.to_string();
+    let secret = identity.to_string().expose_secret().to_string();
+    let raw_content = format!(
+        "# created: 2026-07-08T13:14:12+02:00\n\
+         # public key: {pubkey}\n\
+         {secret}\n"
+    );
+    fs::write(&identity_file, raw_content).unwrap();
+
+    rmrf()
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+            "--encrypt",
+            &pubkey,
+        ])
+        .assert()
+        .success();
+
+    let manifest = one_manifest(store.path());
+    let out = work.path().join("decrypted");
+    rmrf()
+        .args([
+            "restore",
+            manifest.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--force",
+            "--identity",
+            identity_file.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert_eq!(fs::read(&src).unwrap(), fs::read(&out).unwrap());
+}
+
+#[test]
+fn encrypted_backup_rejects_wrong_identity() {
+    let store = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    let src = work.path().join("secret.bin");
+    fs::write(&src, b"wrong identity test").unwrap();
+
+    let identity = age::x25519::Identity::generate();
+    let recipient = identity.to_public();
+    let identity_file = work.path().join("age.key");
+    let pubkey = recipient.to_string();
+    let secret = identity.to_string().expose_secret().to_string();
+    let raw_content = format!(
+        "# created: 2026-07-08T13:14:12+02:00\n\
+         # public key: {pubkey}\n\
+         {secret}\n"
+    );
+    fs::write(&identity_file, raw_content).unwrap();
+
+    rmrf()
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+            "--encrypt",
+            &pubkey,
+        ])
+        .assert()
+        .success();
+
+    let wrong_identity = age::x25519::Identity::generate();
+    let wrong_file = work.path().join("wrong.key");
+    let wrong_secret = wrong_identity.to_string().expose_secret().to_string();
+    let wrong_pubkey = wrong_identity.to_public().to_string();
+    let wrong_content = format!(
+        "# created: 2026-07-08T13:14:12+02:00\n\
+         # public key: {wrong_pubkey}\n\
+         {wrong_secret}\n"
+    );
+    fs::write(&wrong_file, wrong_content).unwrap();
+
+    let manifest = one_manifest(store.path());
+    let out = work.path().join("decrypted");
+    rmrf()
+        .args([
+            "restore",
+            manifest.to_str().unwrap(),
+            "-s",
+            store.path().to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--force",
+            "--identity",
+            wrong_file.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("decryption failed"));
+    assert!(!out.exists(), "no partial output on failed restore");
+}
