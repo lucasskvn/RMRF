@@ -11,6 +11,7 @@ pub struct QmpClient {
 }
 
 impl QmpClient {
+
     pub fn connect(socket_path: &Path) -> Result<Self> {
         let stream = UnixStream::connect(socket_path).map_err(|e| {
             RmrfError::Msg(format!("QMP connect to {}: {e}", socket_path.display()))
@@ -81,12 +82,7 @@ impl QmpClient {
         self.read_response()
     }
 
-    pub fn create_snapshot(
-        &mut self,
-        device: &str,
-        snapshot_file: &Path,
-        format: &str,
-    ) -> Result<()> {
+    pub fn create_snapshot(&mut self, device: &str, snapshot_file: &Path, format: &str) -> Result<()> {
         let args = serde_json::json!({
             "device": device,
             "snapshot-file": snapshot_file.to_string_lossy(),

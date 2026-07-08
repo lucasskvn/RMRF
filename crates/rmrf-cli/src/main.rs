@@ -119,8 +119,6 @@ enum Command {
         #[arg(long)]
         job: Option<String>,
     },
-    #[command(about = "Remove test artifacts from the project root")]
-    Clean,
 }
 
 fn main() {
@@ -155,7 +153,7 @@ fn store_for_command<'a>(command: &'a Command, cfg: &'a RmrfConfig) -> &'a Path 
         Command::Info { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Verify { store, .. } => store.as_deref().unwrap_or(&cfg.store),
         Command::Gc { store, .. } => store.as_deref().unwrap_or(&cfg.store),
-        Command::Cron | Command::Daemon { .. } | Command::Clean => &cfg.store,
+        Command::Cron | Command::Daemon { .. } => &cfg.store,
     }
 }
 
@@ -256,7 +254,6 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
         }
         Command::Cron => handle_cron(cfg),
         Command::Daemon { once, job } => daemon::run_daemon(once, job.as_deref(), cfg),
-        Command::Clean => commands::clean(),
     }
 }
 
