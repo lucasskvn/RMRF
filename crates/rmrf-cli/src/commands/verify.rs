@@ -3,12 +3,7 @@ use rmrf_manifest::Manifest;
 use rmrf_store::hash_data;
 use std::path::Path;
 
-pub fn verify(
-    manifest_path: &Path,
-    store_dir: &Path,
-    rehash: bool,
-    identity: Option<&str>,
-) -> bool {
+pub fn verify(manifest_path: &Path,store_dir: &Path, rehash: bool,identity: Option<&str>) -> bool {
     if !store_dir.exists() {
         eprintln!("Error: store directory not found: {}", store_dir.display());
         return false;
@@ -20,7 +15,6 @@ pub fn verify(
             return false;
         }
     };
-
     let store = match crate::restore::open_chunk_store(store_dir, &manifest, identity) {
         Ok(s) => s,
         Err(e) => {
@@ -28,7 +22,6 @@ pub fn verify(
             return false;
         }
     };
-
     let (total, missing, corrupted) = check_all_chunks(&manifest, &*store, rehash);
 
     report_result(total, missing, corrupted, rehash)
@@ -52,11 +45,7 @@ fn report_result(total: usize, missing: u64, corrupted: u64, rehash: bool) -> bo
     false
 }
 
-fn check_all_chunks(
-    manifest: &Manifest,
-    store: &dyn ChunkStore,
-    rehash: bool,
-) -> (usize, u64, u64) {
+fn check_all_chunks(manifest: &Manifest, store: &dyn ChunkStore,rehash: bool) -> (usize, u64, u64) {
     let total = manifest.chunks.len();
     let mut missing = 0u64;
     let mut corrupted = 0u64;

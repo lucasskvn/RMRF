@@ -37,10 +37,7 @@ pub fn detect_disk_path(vm_id: &str, disk_spec: Option<&str>) -> Result<(PathBuf
     Err("no disk found in VM config (tried qm + pct)".to_string())
 }
 
-fn try_qm_config(
-    vm_id: &str,
-    disk_spec: Option<&str>,
-) -> Result<Option<(PathBuf, String)>, String> {
+fn try_qm_config(vm_id: &str,disk_spec: Option<&str>) -> Result<Option<(PathBuf, String)>, String> {
     let output = std::process::Command::new("qm")
         .args(["config", vm_id])
         .output()
@@ -52,10 +49,7 @@ fn try_qm_config(
     find_disk_from_config(&config, QM_DISK_PREFIXES, disk_spec)
 }
 
-fn try_pct_config(
-    vm_id: &str,
-    disk_spec: Option<&str>,
-) -> Result<Option<(PathBuf, String)>, String> {
+fn try_pct_config(vm_id: &str,disk_spec: Option<&str>) -> Result<Option<(PathBuf, String)>, String> {
     let output = std::process::Command::new("pct")
         .args(["config", vm_id])
         .output()
@@ -71,11 +65,7 @@ fn is_auxiliary_disk(name: &str) -> bool {
     name.starts_with("efidisk") || name.starts_with("tpmstate")
 }
 
-fn find_disk_from_config(
-    config: &str,
-    prefixes: &[&str],
-    disk_spec: Option<&str>,
-) -> Result<Option<(PathBuf, String)>, String> {
+fn find_disk_from_config(config: &str,prefixes: &[&str],disk_spec: Option<&str>) -> Result<Option<(PathBuf, String)>, String> {
     if let Some(spec) = disk_spec {
         return find_specific_disk(config, prefixes, spec);
     }
@@ -106,11 +96,7 @@ fn find_disk_from_config(
     resolve_pvesm_path(data_candidates[0].1)
 }
 
-fn find_specific_disk(
-    config: &str,
-    prefixes: &[&str],
-    disk_spec: &str,
-) -> Result<Option<(PathBuf, String)>, String> {
+fn find_specific_disk(config: &str,prefixes: &[&str],disk_spec: &str) -> Result<Option<(PathBuf, String)>, String> {
     for line in config.lines() {
         let line = line.trim();
         let Some((prefix, rest)) = line.split_once(':') else {

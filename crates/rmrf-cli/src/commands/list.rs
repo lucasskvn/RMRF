@@ -4,12 +4,7 @@ use std::path::Path;
 
 use super::helpers::format_size;
 
-pub fn list(
-    store_dir: &Path,
-    since: Option<&str>,
-    before: Option<&str>,
-    source_filter: Option<&str>,
-) -> bool {
+pub fn list(store_dir: &Path,since: Option<&str>,before: Option<&str>,source_filter: Option<&str>) -> bool {
     if !store_dir.exists() {
         eprintln!("Error: store directory not found: {}", store_dir.display());
         return false;
@@ -28,7 +23,6 @@ pub fn list(
             return false;
         }
     };
-
     let manifests_dir = store_dir.join("manifests");
     let mut entries: Vec<_> = match fs::read_dir(&manifests_dir) {
         Ok(entries) => entries.filter_map(|e| e.ok()).collect(),
@@ -38,13 +32,12 @@ pub fn list(
         }
     };
     entries.sort_by_key(|e| e.file_name());
-
     if entries.is_empty() {
         println!("No backups found.");
         return true;
     }
-
     let mut count = 0u64;
+
     for entry in &entries {
         if print_manifest_entry(entry, since_parsed, before_parsed, source_filter) {
             count += 1;
@@ -68,12 +61,7 @@ fn parse_date_prefix(s: &str) -> Result<u64, String> {
         .map_err(|e| format!("invalid date {s:?}: {e}"))
 }
 
-fn print_manifest_entry(
-    entry: &fs::DirEntry,
-    since: Option<u64>,
-    before: Option<u64>,
-    source_filter: Option<&str>,
-) -> bool {
+fn print_manifest_entry(entry: &fs::DirEntry,since: Option<u64>,before: Option<u64>,source_filter: Option<&str>) -> bool {
     let path = entry.path();
     if path.extension().is_none_or(|ext| ext != "bincode") {
         return false;
@@ -97,7 +85,6 @@ fn print_manifest_entry(
             return false;
         }
     }
-
     let manifest = match Manifest::load(&path) {
         Ok(m) => m,
         Err(e) => {
@@ -105,13 +92,11 @@ fn print_manifest_entry(
             return false;
         }
     };
-
     if let Some(filter) = source_filter {
         if !manifest.source.path.contains(filter) {
             return false;
         }
     }
-
     let size = format_size(manifest.source.size);
     println!(
         "{:19}  {:>9}  {:>6} chunks  {}",

@@ -1,5 +1,5 @@
 use rmrf_core::{DiskFormat, Source, SourceType};
-use rmrf_source::{NoopLifecycle, ProxmoxLxcLifecycle, VmLifecycle, VmSource};
+use rmrf_source::{NoopLifecycle, ProxmoxLxcLifecycle, VmLifecycle, VmSource, VmSourceOptions};
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::rc::Rc;
@@ -61,7 +61,8 @@ fn noop_lifecycle_does_nothing() {
 #[test]
 fn vm_source_opens_with_noop_lifecycle() {
     let path = create_test_file("rmrf_test_vm_open", b"vm data");
-    let vm = VmSource::open(&path, "100", "disk0", DiskFormat::Raw, NoopLifecycle);
+    let opts = VmSourceOptions { path: &path, vm_id: "100", disk_name: "disk0", format: DiskFormat::Raw };
+    let vm = VmSource::open(NoopLifecycle, &opts);
     assert!(vm.is_ok());
     let _ = std::fs::remove_file(&path);
 }
@@ -69,7 +70,8 @@ fn vm_source_opens_with_noop_lifecycle() {
 #[test]
 fn vm_source_reads_content() {
     let path = create_test_file("rmrf_test_vm_read", b"hello vm");
-    let mut vm = VmSource::open(&path, "200", "vda", DiskFormat::Raw, NoopLifecycle).unwrap();
+    let opts = VmSourceOptions { path: &path, vm_id: "200", disk_name: "vda", format: DiskFormat::Raw };
+    let mut vm = VmSource::open(NoopLifecycle, &opts).unwrap();
     let mut buf = [0u8; 64];
     let n = vm.read(&mut buf).unwrap();
     assert_eq!(&buf[..n], b"hello vm");
@@ -82,7 +84,8 @@ fn vm_source_drop_calls_resume() {
     let lifecycle = MockLifecycle::new();
     let resume_calls = Rc::clone(&lifecycle.resume_calls);
     {
-        let _vm = VmSource::open(&path, "400", "sda", DiskFormat::Raw, lifecycle).unwrap();
+        let opts = VmSourceOptions { path: &path, vm_id: "400", disk_name: "sda", format: DiskFormat::Raw };
+        let _vm = VmSource::open(lifecycle, &opts).unwrap();
     }
     assert_eq!(*resume_calls.borrow(), 1);
     let _ = std::fs::remove_file(&path);
@@ -91,13 +94,8 @@ fn vm_source_drop_calls_resume() {
 #[test]
 fn vm_source_suspend_failure_propagates() {
     let path = create_test_file("rmrf_test_vm_sfail", b"suspend fail");
-    let result = VmSource::open(
-        &path,
-        "500",
-        "sda",
-        DiskFormat::Raw,
-        MockLifecycle::failing(),
-    );
+    let opts = VmSourceOptions { path: &path, vm_id: "500", disk_name: "sda", format: DiskFormat::Raw };
+    let result = VmSource::open(MockLifecycle::failing(), &opts);
     assert!(result.is_err());
     let _ = std::fs::remove_file(&path);
 }
@@ -128,7 +126,8 @@ fn vm_source_open_failure_after_suspend_resumes() {
     perms.set_mode(0o000);
     std::fs::set_permissions(&path, perms).unwrap();
 
-    let result = VmSource::open(&path, "600", "sda", DiskFormat::Raw, lifecycle);
+    let opts = VmSourceOptions { path: &path, vm_id: "600", disk_name: "sda", format: DiskFormat::Raw };
+    let result = VmSource::open(lifecycle, &opts);
     assert!(result.is_err());
     assert!(!*suspended.borrow(), "should be resumed after open failure");
     assert_eq!(*resume_calls.borrow(), 1);
@@ -141,13 +140,8 @@ fn vm_source_file_not_found_before_suspend() {
     let lifecycle = MockLifecycle::new();
     let suspended = Rc::clone(&lifecycle.suspended);
     let resume_calls = Rc::clone(&lifecycle.resume_calls);
-    let result = VmSource::open(
-        std::path::Path::new("/tmp/nonexistent_vm_disk_888"),
-        "700",
-        "nvme0",
-        DiskFormat::Qcow2,
-        lifecycle,
-    );
+    let opts = VmSourceOptions { path: std::path::Path::new("/tmp/nonexistent_vm_disk_888"), vm_id: "700", disk_name: "nvme0", format: DiskFormat::Qcow2 };
+    let result = VmSource::open(lifecycle, &opts);
     assert!(result.is_err());
     assert!(!*suspended.borrow());
     assert_eq!(*resume_calls.borrow(), 1);
@@ -156,7 +150,8 @@ fn vm_source_file_not_found_before_suspend() {
 #[test]
 fn vm_source_qcow2_format_metadata() {
     let path = create_test_file("rmrf_test_vm_qcow2", b"qcow2 data");
-    let vm = VmSource::open(&path, "800", "nvme0", DiskFormat::Qcow2, NoopLifecycle).unwrap();
+    let opts = VmSourceOptions { path: &path, vm_id: "800", disk_name: "nvme0", format: DiskFormat::Qcow2 };
+    let vm = VmSource::open(NoopLifecycle, &opts).unwrap();
     let meta = vm.metadata();
     assert_eq!(
         meta.source_type,

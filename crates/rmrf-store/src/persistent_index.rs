@@ -48,17 +48,12 @@ impl PersistentDedupIndex {
 }
 
 impl DedupIndex for PersistentDedupIndex {
+
     fn lookup(&self, hash: &Hash) -> RmrfResult<Option<IndexEntry>> {
         Ok(self.entries.get(&Self::hash_key(hash)).cloned())
     }
 
-    fn insert(
-        &mut self,
-        hash: &Hash,
-        location: ChunkLocation,
-        uncompressed_size: u32,
-        compressed_size: u32,
-    ) -> RmrfResult<()> {
+    fn insert(&mut self,hash: &Hash,location: ChunkLocation,uncompressed_size: u32,compressed_size: u32) -> RmrfResult<()> {
         self.entries.insert(
             Self::hash_key(hash),
             IndexEntry {

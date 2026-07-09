@@ -15,13 +15,13 @@ pub fn info(manifest_path: &Path, store_dir: &Path) -> bool {
             return false;
         }
     };
-    println!("Version:     v{}", manifest.version);
-    println!("Source path: {}", manifest.source.path);
+    println!("Version:      v{}", manifest.version);
+    println!("Source path:  {}", manifest.source.path);
     let size = format_size(manifest.source.size);
-    println!("Source size: {} ({})", manifest.source.size, size);
-    println!("Source type: {:?}", manifest.source.source_type);
-    println!("Modified:    {}", manifest.source.modified);
-    println!("Permissions: {:o}", manifest.source.permissions);
-    println!("Chunks:      {}", manifest.chunks.len());
+    println!("Source size:  {} ({})", manifest.source.size, size);
+    println!("Source type:  {:?}", manifest.source.source_type);
+    println!("Modified:     {}", manifest.source.modified);
+    println!("Permissions:  {:o}", manifest.source.permissions);
+    println!("Chunks:       {}", manifest.chunks.len());
     true
 }

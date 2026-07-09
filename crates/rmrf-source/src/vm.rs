@@ -110,6 +110,13 @@ fn run_external(cmd: &str, action: &str, vm_id: &str) -> rmrf_core::Result<()> {
     Ok(())
 }
 
+pub struct VmSourceOptions<'a> {
+    pub path: &'a Path,
+    pub vm_id: &'a str,
+    pub disk_name: &'a str,
+    pub format: DiskFormat,
+}
+
 pub struct VmSource<L: VmLifecycle> {
     pub(crate) source: FileSource,
     lifecycle: L,
@@ -118,23 +125,18 @@ pub struct VmSource<L: VmLifecycle> {
 }
 
 impl<L: VmLifecycle> VmSource<L> {
-    pub fn open(
-        path: &Path,
-        vm_id: &str,
-        disk_name: &str,
-        format: DiskFormat,
-        lifecycle: L,
-    ) -> rmrf_core::Result<Self> {
-        lifecycle.suspend(vm_id)?;
+
+    pub fn open(lifecycle: L, opts: &VmSourceOptions) -> rmrf_core::Result<Self> {
+        lifecycle.suspend(opts.vm_id)?;
 
         let source_path = match lifecycle.snapshot_path() {
             Some(snap) => snap,
-            None => path.to_path_buf(),
+            None => opts.path.to_path_buf(),
         };
 
         if !source_path.exists() {
-            if let Err(e) = lifecycle.resume(vm_id) {
-                eprintln!("Warning: failed to resume VM {vm_id}: {e}");
+            if let Err(e) = lifecycle.resume(opts.vm_id) {
+                eprintln!("Warning: failed to resume VM {}: {e}", opts.vm_id);
             }
             return Err(rmrf_core::RmrfError::Msg(format!(
                 "VM disk not found: {}",
@@ -143,8 +145,8 @@ impl<L: VmLifecycle> VmSource<L> {
         }
 
         let source = FileSource::new(&source_path).map_err(|e| {
-            if let Err(re) = lifecycle.resume(vm_id) {
-                eprintln!("Warning: failed to resume VM {vm_id}: {re}");
+            if let Err(re) = lifecycle.resume(opts.vm_id) {
+                eprintln!("Warning: failed to resume VM {}: {re}", opts.vm_id);
             }
             rmrf_core::RmrfError::Io(e)
         })?;
@@ -152,14 +154,14 @@ impl<L: VmLifecycle> VmSource<L> {
         let mut vm_source = Self {
             source,
             lifecycle,
-            vm_id: vm_id.to_string(),
+            vm_id: opts.vm_id.to_string(),
             suspended: true,
         };
 
         vm_source.source.metadata.source_type = SourceType::VmDisk {
-            vm_id: vm_id.to_string(),
-            disk_name: disk_name.to_string(),
-            format,
+            vm_id: opts.vm_id.to_string(),
+            disk_name: opts.disk_name.to_string(),
+            format: opts.format,
         };
 
         Ok(vm_source)

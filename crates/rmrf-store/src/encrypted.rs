@@ -7,11 +7,8 @@ pub struct EncryptedChunkStore<S: ChunkStore> {
 }
 
 impl<S: ChunkStore> EncryptedChunkStore<S> {
-    pub fn new(
-        inner: S,
-        recipient: age::x25519::Recipient,
-        identity: age::x25519::Identity,
-    ) -> Self {
+
+    pub fn new(inner: S,recipient: age::x25519::Recipient,identity: age::x25519::Identity) -> Self {
         EncryptedChunkStore {
             inner,
             recipient,
@@ -21,6 +18,7 @@ impl<S: ChunkStore> EncryptedChunkStore<S> {
 }
 
 impl<S: ChunkStore> ChunkStore for EncryptedChunkStore<S> {
+
     fn put(&mut self, hash: &Hash, data: &[u8]) -> RmrfResult<ChunkLocation> {
         let encrypted = age::encrypt(&self.recipient, data)
             .map_err(|e| RmrfError::Msg(format!("encryption failed: {e}")))?;

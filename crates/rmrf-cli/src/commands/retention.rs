@@ -43,12 +43,7 @@ pub fn run_retention_and_gc(store_dir: &Path, days: u64, dry_run: bool) -> bool 
     }
 }
 
-fn remove_old_manifests(
-    store_dir: &Path,
-    cutoff: i64,
-    dedup_index: &mut PersistentDedupIndex,
-    dry_run: bool,
-) -> u64 {
+fn remove_old_manifests(store_dir: &Path, cutoff: i64,dedup_index: &mut PersistentDedupIndex,dry_run: bool) -> u64 {
     let manifests_dir = store_dir.join("manifests");
     let mut deleted = 0u64;
 

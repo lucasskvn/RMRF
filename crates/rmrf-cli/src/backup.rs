@@ -1,7 +1,7 @@
 use crate::config::RmrfConfig;
 use crate::pipeline::run_chunk_pipeline;
 use rmrf_core::{ChunkStore, DiskFormat, Source};
-use rmrf_source::{FileSource, VmLifecycle, VmSource};
+use rmrf_source::{FileSource, VmLifecycle, VmSource, VmSourceOptions};
 use rmrf_store::{CompressedChunkStore, EncryptedChunkStore, LocalChunkStore};
 use std::fs;
 use std::io;
@@ -10,11 +10,17 @@ use std::str::FromStr;
 
 pub use crate::pipeline::BackupStats;
 
-fn open_chunk_store(
-    store_dir: &Path,
-    cfg: &RmrfConfig,
-    encrypt: Option<&str>,
-) -> Result<Box<dyn ChunkStore>, String> {
+pub struct BackupVmOptions<'a> {
+    pub path: &'a Path,
+    pub store_dir: &'a Path,
+    pub vm_id: &'a str,
+    pub disk_name: &'a str,
+    pub format: DiskFormat,
+    pub cfg: &'a RmrfConfig,
+    pub encrypt: Option<&'a str>,
+}
+
+fn open_chunk_store(store_dir: &Path,cfg: &RmrfConfig,encrypt: Option<&str>) -> Result<Box<dyn ChunkStore>, String> {
     let chunks_dir = store_dir.join("chunks");
     fs::create_dir_all(&chunks_dir).map_err(|e| format!("Error creating chunks directory: {e}"))?;
     let local = LocalChunkStore::new(chunks_dir).map_err(|e| e.to_string())?;
@@ -163,7 +169,6 @@ fn backup_file(
             return None;
         }
     };
-
     let metadata = file_source.metadata();
     let file_size = metadata.size;
     let encryption_key = encrypt.map(|s| s.to_string());
@@ -185,18 +190,14 @@ fn backup_file(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn backup_vm(
-    path: &std::path::Path,
-    store_dir: &std::path::Path,
-    vm_id: &str,
-    disk_name: &str,
-    format: DiskFormat,
-    lifecycle: Box<dyn VmLifecycle>,
-    cfg: &RmrfConfig,
-    encrypt: Option<&str>,
-) -> bool {
-    let mut vm_source = match VmSource::open(path, vm_id, disk_name, format, lifecycle) {
+pub fn backup_vm(lifecycle: Box<dyn VmLifecycle>, opts: &BackupVmOptions) -> bool {
+    let vm_opts = VmSourceOptions {
+        path: opts.path,
+        vm_id: opts.vm_id,
+        disk_name: opts.disk_name,
+        format: opts.format,
+    };
+    let mut vm_source = match VmSource::open(lifecycle, &vm_opts) {
         Ok(vs) => vs,
         Err(e) => {
             eprintln!("Error opening VM source: {e}");
@@ -206,13 +207,13 @@ pub fn backup_vm(
 
     let metadata = vm_source.metadata();
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let basename = path
+    let basename = opts.path
         .file_name()
-        .unwrap_or(path.as_os_str())
+        .unwrap_or(opts.path.as_os_str())
         .to_string_lossy()
         .to_string();
 
-    let mut chunk_store = match open_chunk_store(store_dir, cfg, encrypt) {
+    let mut chunk_store = match open_chunk_store(opts.store_dir, opts.cfg, opts.encrypt) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{e}");
@@ -220,14 +221,14 @@ pub fn backup_vm(
         }
     };
 
-    let encryption_key = encrypt.map(|s| s.to_string());
+    let encryption_key = opts.encrypt.map(|s| s.to_string());
     let stats = run_chunk_pipeline(
         &mut vm_source,
         metadata,
-        store_dir,
+        opts.store_dir,
         &timestamp,
         &basename,
-        cfg,
+        opts.cfg,
         &mut *chunk_store,
         encryption_key,
     );

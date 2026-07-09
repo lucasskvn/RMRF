@@ -31,7 +31,6 @@ pub fn gc(store_dir: &Path, dry_run: bool) -> bool {
 fn collect_referenced_hashes(store_dir: &Path) -> Result<HashSet<[u8; 32]>, String> {
     let manifests_dir = store_dir.join("manifests");
     let mut referenced = HashSet::new();
-
     let entries = match fs::read_dir(&manifests_dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(referenced),
@@ -52,11 +51,7 @@ fn collect_referenced_hashes(store_dir: &Path) -> Result<HashSet<[u8; 32]>, Stri
     Ok(referenced)
 }
 
-fn scan_and_delete_orphans(
-    store_dir: &Path,
-    referenced: &HashSet<[u8; 32]>,
-    dry_run: bool,
-) -> GcStats {
+fn scan_and_delete_orphans(store_dir: &Path,referenced: &HashSet<[u8; 32]>,dry_run: bool) -> GcStats {
     let chunks_dir = store_dir.join("chunks");
     let hex_char = |b: u8| b.is_ascii_hexdigit();
     let mut orphans = 0u64;
@@ -85,12 +80,7 @@ fn scan_and_delete_orphans(
     }
 }
 
-fn scan_prefix(
-    prefix: &fs::DirEntry,
-    hex_char: impl Fn(u8) -> bool,
-    referenced: &HashSet<[u8; 32]>,
-    dry_run: bool,
-) -> (String, GcStats) {
+fn scan_prefix(prefix: &fs::DirEntry,hex_char: impl Fn(u8) -> bool,referenced: &HashSet<[u8; 32]>,dry_run: bool) -> (String, GcStats) {
     let name = prefix.file_name().to_string_lossy().to_string();
     let mut stats = GcStats {
         orphans: 0,
@@ -100,7 +90,6 @@ fn scan_prefix(
     if name.len() != 2 || !name.bytes().all(hex_char) {
         return (name, stats);
     }
-
     if let Ok(inner_entries) = fs::read_dir(prefix.path()) {
         for inner in inner_entries.flatten() {
             let inner_name = inner.file_name().to_string_lossy().to_string();
@@ -111,14 +100,7 @@ fn scan_prefix(
     (name, stats)
 }
 
-fn try_delete_orphan(
-    inner: &fs::DirEntry,
-    inner_name: &str,
-    name: &str,
-    referenced: &HashSet<[u8; 32]>,
-    dry_run: bool,
-    stats: &mut GcStats,
-) {
+fn try_delete_orphan(inner: &fs::DirEntry, inner_name: &str,name: &str,referenced: &HashSet<[u8; 32]>,dry_run: bool,stats: &mut GcStats) {
     let hex_str = format!("{name}{inner_name}");
     let Some(hash_bytes) = hex_to_bytes(&hex_str) else {
         eprintln!("Warning: non-hex file in chunks dir: {name}/{inner_name}");
@@ -130,11 +112,9 @@ fn try_delete_orphan(
     }
     let mut hash = [0u8; 32];
     hash.copy_from_slice(&hash_bytes);
-
     if referenced.contains(&hash) {
         return;
     }
-
     let size = inner.metadata().map(|m| m.len()).unwrap_or(0);
     if dry_run {
         println!(

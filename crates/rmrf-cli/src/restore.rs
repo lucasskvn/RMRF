@@ -20,26 +20,28 @@ struct RestoreCtx {
     jobs: usize,
 }
 
-fn prepare_restore(
-    manifest_path: &Path,
-    store_dir: &Path,
-    output: &Path,
-    force: bool,
-    jobs: usize,
-    identity: Option<&str>,
-) -> Option<RestoreCtx> {
-    let manifest = match Manifest::load(manifest_path) {
+pub struct RestoreOptions<'a> {
+    pub manifest_path: &'a Path,
+    pub store_dir: &'a Path,
+    pub output: &'a Path,
+    pub force: bool,
+    pub jobs: usize,
+    pub identity: Option<&'a str>,
+}
+
+fn prepare_restore(opts: &RestoreOptions) -> Option<RestoreCtx> {
+    let manifest = match Manifest::load(opts.manifest_path) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("Error loading manifest: {e}");
             return None;
         }
     };
-    let output_path = output.to_path_buf();
-    if !check_overwrite(&output_path, force) {
+    let output_path = opts.output.to_path_buf();
+    if !check_overwrite(&output_path, opts.force) {
         return None;
     }
-    let chunk_store = match open_chunk_store(store_dir, &manifest, identity) {
+    let chunk_store = match open_chunk_store(opts.store_dir, &manifest, opts.identity) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{e}");
@@ -50,21 +52,14 @@ fn prepare_restore(
         manifest,
         output_path,
         chunk_store,
-        jobs,
+        jobs: opts.jobs,
     })
 }
 
-pub fn restore(
-    manifest_path: &Path,
-    store_dir: &Path,
-    output: &Path,
-    force: bool,
-    jobs: usize,
-    identity: Option<&str>,
-) -> bool {
-    println!("Restore: {}", manifest_path.display());
+pub fn restore(opts: &RestoreOptions) -> bool {
+    println!("Restore: {}", opts.manifest_path.display());
 
-    let ctx = match prepare_restore(manifest_path, store_dir, output, force, jobs, identity) {
+    let ctx = match prepare_restore(opts) {
         Some(c) => c,
         None => return false,
     };
@@ -127,11 +122,7 @@ fn check_overwrite(path: &Path, force: bool) -> bool {
     false
 }
 
-pub(crate) fn open_chunk_store(
-    store_dir: &Path,
-    manifest: &Manifest,
-    identity: Option<&str>,
-) -> Result<Box<dyn ChunkStore>, String> {
+pub(crate) fn open_chunk_store(store_dir: &Path,manifest: &Manifest,identity: Option<&str>) -> Result<Box<dyn ChunkStore>, String> {
     let chunks_dir = store_dir.join("chunks");
     let local_store = LocalChunkStore::new(chunks_dir).map_err(|e| e.to_string())?;
     let compressed = CompressedChunkStore::new(local_store);
@@ -167,12 +158,7 @@ fn parse_age_identity(content: &str, path: &std::path::Path) -> Result<age::x255
     ))
 }
 
-pub fn restore_file(
-    manifest: &Manifest,
-    store: &dyn ChunkStore,
-    dest: &Path,
-    jobs: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn restore_file(manifest: &Manifest,store: &dyn ChunkStore,dest: &Path,jobs: usize) -> Result<(), Box<dyn std::error::Error>> {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(jobs.max(1))
         .build()?;
@@ -234,10 +220,7 @@ fn tmp_path(dest: &Path) -> PathBuf {
     PathBuf::from(format!("{}.tmp", dest.display()))
 }
 
-fn apply_file_handle_metadata(
-    file: &fs::File,
-    manifest: &Manifest,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn apply_file_handle_metadata(file: &fs::File,manifest: &Manifest) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(unix)]
     {
         let mode = manifest.source.permissions;

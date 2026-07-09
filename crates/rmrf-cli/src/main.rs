@@ -15,6 +15,32 @@ use hypervisor::{validate_vm_id, Hypervisor};
 use lock::{check_stale_sentinels, store_sentinel_path, try_lock_store, unlock_store, SentinelCheckResult};
 use std::path::{Path, PathBuf};
 
+struct BackupOptions {
+    path: Option<PathBuf>,
+    store: Option<PathBuf>,
+    retain: Option<u64>,
+    vm: Option<String>,
+    disk: Option<String>,
+    disk_name: Option<String>,
+    format: disk_detect::DiskFormatArg,
+    no_suspend: bool,
+    hypervisor: hypervisor::Hypervisor,
+    encrypt: Option<String>,
+    live: bool,
+    _qmp_socket: Option<PathBuf>,
+}
+
+struct RunBackupOptions<'a> {
+    path: &'a Path,
+    store: &'a Path,
+    vm: &'a Option<String>,
+    disk_name: &'a Option<String>,
+    disk_format: rmrf_core::DiskFormat,
+    cfg: &'a RmrfConfig,
+    encrypt: Option<&'a str>,
+    retain: Option<u64>,
+}
+
 #[derive(Parser)]
 #[command(
     name = "rmrf",
@@ -163,37 +189,8 @@ fn store_for_command<'a>(command: &'a Command, cfg: &'a RmrfConfig) -> &'a Path 
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn dispatch_backup(
-    path: Option<PathBuf>,
-    store: Option<PathBuf>,
-    retain: Option<u64>,
-    vm: Option<String>,
-    disk: Option<String>,
-    disk_name: Option<String>,
-    format: disk_detect::DiskFormatArg,
-    no_suspend: bool,
-    hypervisor: hypervisor::Hypervisor,
-    cfg: &RmrfConfig,
-    encrypt: Option<String>,
-    live: bool,
-    qmp_socket: Option<PathBuf>,
-) -> bool {
-    handle_backup(
-        path.as_deref(),
-        store.as_deref().unwrap_or(&cfg.store),
-        retain,
-        vm,
-        disk.as_deref(),
-        disk_name,
-        format,
-        no_suspend,
-        hypervisor,
-        cfg,
-        encrypt.as_deref(),
-        live,
-        qmp_socket.as_deref(),
-    )
+fn dispatch_backup(opts: BackupOptions, cfg: &RmrfConfig) -> bool {
+    handle_backup(&opts, cfg)
 }
 
 fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
@@ -211,9 +208,9 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             encrypt,
             live,
             qmp_socket,
-        } => dispatch_backup(
+        } => dispatch_backup(BackupOptions {
             path, store, retain, vm, disk, disk_name, format,
-            no_suspend, hypervisor, cfg, encrypt, live, qmp_socket,
+            no_suspend, hypervisor, encrypt, live, _qmp_socket: qmp_socket }, cfg
         ),
         Command::Restore {
             manifest,
@@ -222,14 +219,17 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             force,
             jobs,
             identity,
-        } => restore::restore(
-            &manifest,
-            store.as_deref().unwrap_or(&cfg.store),
-            &output,
-            force,
-            jobs,
-            identity.as_deref(),
-        ),
+        } => {
+            let restore_opts = restore::RestoreOptions {
+                manifest_path: &manifest,
+                store_dir: store.as_deref().unwrap_or(&cfg.store),
+                output: &output,
+                force,
+                jobs,
+                identity: identity.as_deref(),
+            };
+            restore::restore(&restore_opts)
+        }
         Command::List {
             store,
             since,
@@ -310,68 +310,51 @@ fn build_lifecycle(vm: &Option<String>, no_suspend: bool, hypervisor: &Hyperviso
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_backup_with_vm(
-    path: &Path,
-    store: &Path,
-    vm_id: &str,
-    disk_name: &Option<String>,
-    disk_format: rmrf_core::DiskFormat,
-    lifecycle: Box<dyn rmrf_source::VmLifecycle>,
-    cfg: &RmrfConfig,
-    encrypt: Option<&str>,
-) -> bool {
-    let disk_label = disk_name
+fn run_backup_with_vm(opts: &RunBackupOptions, vm_id: &str, lifecycle: Box<dyn rmrf_source::VmLifecycle>) -> bool {
+    let disk_label = opts.disk_name
         .as_deref()
-        .unwrap_or_else(|| path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
-    let sentinel = store_sentinel_path(store, vm_id);
+        .unwrap_or_else(|| opts.path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
+    let sentinel = store_sentinel_path(opts.store, vm_id);
     std::fs::write(&sentinel, chrono::Utc::now().to_rfc3339()).ok();
-    let result = backup::backup_vm(path, store, vm_id, disk_label, disk_format, lifecycle, cfg, encrypt);
+    let backup_vm_opts = backup::BackupVmOptions {
+        path: opts.path,
+        store_dir: opts.store,
+        vm_id,
+        disk_name: disk_label,
+        format: opts.disk_format,
+        cfg: opts.cfg,
+        encrypt: opts.encrypt,
+    };
+    let result = backup::backup_vm(lifecycle, &backup_vm_opts);
     std::fs::remove_file(&sentinel).ok();
     result
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_backup_with_lock(path: &Path, store: &Path, vm: &Option<String>, disk_name: &Option<String>, disk_format: rmrf_core::DiskFormat, lifecycle: Box<dyn rmrf_source::VmLifecycle>, cfg: &RmrfConfig, encrypt: Option<&str>, retain: Option<u64>) -> bool {
-    if !try_lock_store(store) {
+fn run_backup_with_lock(opts: &RunBackupOptions, lifecycle: Box<dyn rmrf_source::VmLifecycle>) -> bool {
+    if !try_lock_store(opts.store) {
         return false;
     }
-    let ok = if let Some(vm_id) = vm {
-        run_backup_with_vm(path, store, vm_id, disk_name, disk_format, lifecycle, cfg, encrypt)
+    let ok = if let Some(vm_id) = opts.vm {
+        run_backup_with_vm(opts, vm_id, lifecycle)
     } else {
-        backup::backup(path, store, cfg, encrypt)
+        backup::backup(opts.path, opts.store, opts.cfg, opts.encrypt)
     };
     if !ok {
-        unlock_store(store);
+        unlock_store(opts.store);
         return false;
     }
-    if let Some(days) = retain {
-        let ok = commands::run_retention_and_gc(store, days, false);
-        unlock_store(store);
+    if let Some(days) = opts.retain {
+        let ok = commands::run_retention_and_gc(opts.store, days, false);
+        unlock_store(opts.store);
         ok
     } else {
-        unlock_store(store);
+        unlock_store(opts.store);
         true
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn handle_backup(
-    path: Option<&std::path::Path>,
-    store: &std::path::Path,
-    retain: Option<u64>,
-    vm: Option<String>,
-    disk: Option<&str>,
-    disk_name: Option<String>,
-    format: DiskFormatArg,
-    no_suspend: bool,
-    hypervisor: Hypervisor,
-    cfg: &RmrfConfig,
-    encrypt: Option<&str>,
-    live: bool,
-    _qmp_socket: Option<&std::path::Path>,
-) -> bool {
-    if live {
+fn handle_backup(opts: &BackupOptions, cfg: &RmrfConfig) -> bool {
+    if opts.live {
         eprintln!(
             "Error: --live (QMP live backup) is disabled. \
              blockdev-snapshot-sync creates an overlay disk with no merge-back \
@@ -380,14 +363,14 @@ fn handle_backup(
         );
         return false;
     }
-    if let Some(vm_id) = vm.as_deref() {
+    if let Some(vm_id) = opts.vm.as_deref() {
         if let Err(e) = validate_vm_id(vm_id) {
             eprintln!("Error: {e}");
             return false;
         }
     }
 
-    let (resolved_path, _) = match resolve_backup_path(path, &vm, disk, &disk_name) {
+    let (resolved_path, _) = match resolve_backup_path(opts.path.as_deref(), &opts.vm, opts.disk.as_deref(), &opts.disk_name) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -395,7 +378,18 @@ fn handle_backup(
         }
     };
 
-    let disk_format = parse_disk_format(&format, &resolved_path);
-    let lifecycle = build_lifecycle(&vm, no_suspend, &hypervisor);
-    run_backup_with_lock(&resolved_path, store, &vm, &disk_name, disk_format, lifecycle, cfg, encrypt, retain)
+    let disk_format = parse_disk_format(&opts.format, &resolved_path);
+    let lifecycle = build_lifecycle(&opts.vm, opts.no_suspend, &opts.hypervisor);
+    let store = opts.store.as_deref().unwrap_or(&cfg.store);
+    let run_opts = RunBackupOptions {
+        path: &resolved_path,
+        store,
+        vm: &opts.vm,
+        disk_name: &opts.disk_name,
+        disk_format,
+        cfg,
+        encrypt: opts.encrypt.as_deref(),
+        retain: opts.retain,
+    };
+    run_backup_with_lock(&run_opts, lifecycle)
 }

@@ -8,6 +8,33 @@ use rmrf_store::{hash_data, PersistentDedupIndex};
 use std::fs;
 use std::path::Path;
 
+struct ChunkLoopMuts<'a> {
+    source: &'a mut dyn Source,
+    chunk_store: &'a mut dyn ChunkStore,
+    dedup_index: &'a mut PersistentDedupIndex,
+}
+
+struct ChunkLoopOptions<'a> {
+    store_dir: &'a Path,
+    metadata: SourceMetadata,
+    timestamp: &'a str,
+    label: &'a str,
+    cfg: &'a RmrfConfig,
+    encryption: Option<String>,
+    total: u64,
+}
+
+struct FinishBackupOptions<'a> {
+    chunk_hashes: &'a [[u8; 32]],
+    metadata: SourceMetadata,
+    store_dir: &'a Path,
+    timestamp: &'a str,
+    label: &'a str,
+    stats: BackupStats,
+    encryption: Option<String>,
+}
+
+#[derive(Clone, Copy)]
 pub struct BackupStats {
     pub chunks: u64,
     pub bytes: u64,
@@ -54,10 +81,12 @@ pub fn run_chunk_pipeline(
         }
     };
 
-    run_chunk_loop(
+    let muts = ChunkLoopMuts {
         source,
         chunk_store,
-        &mut dedup_index,
+        dedup_index: &mut dedup_index,
+    };
+    let opts = ChunkLoopOptions {
         store_dir,
         metadata,
         timestamp,
@@ -65,7 +94,8 @@ pub fn run_chunk_pipeline(
         cfg,
         encryption,
         total,
-    )
+    };
+    run_chunk_loop(muts, &opts)
 }
 
 fn format_size(bytes: u64) -> String {
@@ -80,25 +110,13 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_chunk_loop(
-    source: &mut dyn Source,
-    chunk_store: &mut dyn ChunkStore,
-    dedup_index: &mut PersistentDedupIndex,
-    store_dir: &Path,
-    metadata: SourceMetadata,
-    timestamp: &str,
-    label: &str,
-    cfg: &RmrfConfig,
-    encryption: Option<String>,
-    total: u64,
-) -> BackupStats {
-    let chunker = StreamCDC::new(source, cfg.cdc_min, cfg.cdc_avg, cfg.cdc_max);
+fn run_chunk_loop(muts: ChunkLoopMuts, opts: &ChunkLoopOptions) -> BackupStats {
+    let chunker = StreamCDC::new(muts.source, opts.cfg.cdc_min, opts.cfg.cdc_avg, opts.cfg.cdc_max);
     let mut chunk_hashes = Vec::new();
     let mut chunk_count = 0u64;
     let mut total_bytes = 0u64;
     let mut dedup_skipped = 0u64;
-    let pb = create_backup_progress(total);
+    let pb = create_backup_progress(opts.total);
 
     for chunk_result in chunker {
         if signal::SHOULD_EXIT.load(std::sync::atomic::Ordering::SeqCst) {
@@ -106,7 +124,7 @@ fn run_chunk_loop(
             eprintln!("Backup interrupted by signal");
             break;
         }
-        match feed_chunk(chunk_result, chunk_store, dedup_index) {
+        match feed_chunk(chunk_result, muts.chunk_store, muts.dedup_index) {
             Ok(info) => {
                 chunk_hashes.push(info.hash);
                 chunk_count += 1;
@@ -130,20 +148,20 @@ fn run_chunk_loop(
     }
 
     pb.finish_and_clear();
-    finish_backup(
-        &chunk_hashes,
-        dedup_index,
-        metadata,
-        store_dir,
-        timestamp,
-        label,
-        BackupStats {
+    let finish_opts = FinishBackupOptions {
+        chunk_hashes: &chunk_hashes,
+        metadata: opts.metadata.clone(),
+        store_dir: opts.store_dir,
+        timestamp: opts.timestamp,
+        label: opts.label,
+        stats: BackupStats {
             chunks: chunk_count,
             bytes: total_bytes,
             dedup_skipped,
         },
-        encryption,
-    )
+        encryption: opts.encryption.clone(),
+    };
+    finish_backup(muts.dedup_index, &finish_opts)
 }
 
 fn feed_chunk(
@@ -166,12 +184,7 @@ fn feed_chunk(
     })
 }
 
-fn process_chunk(
-    hash: &[u8; 32],
-    data: &[u8],
-    chunk_store: &mut dyn ChunkStore,
-    dedup_index: &mut PersistentDedupIndex,
-) -> ProcessResult {
+fn process_chunk(hash: &[u8; 32],data: &[u8],chunk_store: &mut dyn ChunkStore,dedup_index: &mut PersistentDedupIndex) -> ProcessResult {
     match dedup_index.lookup(hash) {
         Ok(Some(_)) => match chunk_store.exists(hash) {
             Ok(true) => {
@@ -211,28 +224,18 @@ fn process_chunk(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn finish_backup(
-    chunk_hashes: &[[u8; 32]],
-    dedup_index: &mut PersistentDedupIndex,
-    metadata: SourceMetadata,
-    store_dir: &Path,
-    timestamp: &str,
-    label: &str,
-    stats: BackupStats,
-    encryption: Option<String>,
-) -> BackupStats {
+fn finish_backup(dedup_index: &mut PersistentDedupIndex, opts: &FinishBackupOptions) -> BackupStats {
     if let Err(e) = dedup_index.save() {
         eprintln!("Warning: failed to save dedup index: {e}");
     }
     save_manifest(
-        chunk_hashes,
-        metadata,
-        store_dir,
-        timestamp,
-        label,
-        stats,
-        encryption,
+        opts.chunk_hashes,
+        opts.metadata.clone(),
+        opts.store_dir,
+        opts.timestamp,
+        opts.label,
+        opts.stats,
+        opts.encryption.clone(),
     )
 }
 
