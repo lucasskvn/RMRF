@@ -2,6 +2,14 @@ use clap::ValueEnum;
 use rmrf_core::DiskFormat;
 use std::path::PathBuf;
 
+fn run_cmd(cmd: &str, args: &[&str]) -> Result<Option<std::process::Output>, String> {
+    match std::process::Command::new(cmd).args(args).output() {
+        Ok(output) => Ok(Some(output)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{cmd}: {e}")),
+    }
+}
+
 #[derive(ValueEnum, Clone)]
 pub enum DiskFormatArg {
     Auto,
@@ -44,10 +52,9 @@ fn try_qm_config(
     vm_id: &str,
     disk_spec: Option<&str>,
 ) -> Result<Option<(PathBuf, String)>, String> {
-    let output = std::process::Command::new("qm")
-        .args(["config", vm_id])
-        .output()
-        .map_err(|e| format!("qm config: {e}"))?;
+    let Some(output) = run_cmd("qm", &["config", vm_id])? else {
+        return Ok(None);
+    };
     if !output.status.success() {
         return Ok(None);
     }
@@ -59,10 +66,9 @@ fn try_pct_config(
     vm_id: &str,
     disk_spec: Option<&str>,
 ) -> Result<Option<(PathBuf, String)>, String> {
-    let output = std::process::Command::new("pct")
-        .args(["config", vm_id])
-        .output()
-        .map_err(|e| format!("pct config: {e}"))?;
+    let Some(output) = run_cmd("pct", &["config", vm_id])? else {
+        return Ok(None);
+    };
     if !output.status.success() {
         return Ok(None);
     }
@@ -74,10 +80,9 @@ fn try_virsh_config(
     vm_id: &str,
     disk_spec: Option<&str>,
 ) -> Result<Option<(PathBuf, String)>, String> {
-    let output = std::process::Command::new("virsh")
-        .args(["domblklist", vm_id])
-        .output()
-        .map_err(|e| format!("virsh domblklist: {e}"))?;
+    let Some(output) = run_cmd("virsh", &["domblklist", vm_id])? else {
+        return Ok(None);
+    };
     if !output.status.success() {
         return Ok(None);
     }
@@ -223,10 +228,9 @@ fn collect_disk_candidates<'a>(config: &'a str, prefixes: &[&str]) -> Vec<(&'a s
 }
 
 fn resolve_pvesm_path(volume: &str) -> Result<Option<(PathBuf, String)>, String> {
-    let output = std::process::Command::new("pvesm")
-        .args(["path", volume])
-        .output()
-        .map_err(|e| format!("pvesm path: {e}"))?;
+    let Some(output) = run_cmd("pvesm", &["path", volume])? else {
+        return Err("pvesm not found — cannot resolve Proxmox storage path".into());
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("pvesm path {volume}: {stderr}"));
