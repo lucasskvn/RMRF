@@ -510,6 +510,9 @@ fn restore_vm(
     match result {
         Ok(_) => {
             println!("Restore complete: {}", disk_path.display());
+            if let Err(e) = lifecycle.resume(vm_id) {
+                eprintln!("Warning: failed to resume VM {vm_id}: {e}");
+            }
             guard.disarm();
             true
         }
