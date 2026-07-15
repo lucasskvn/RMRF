@@ -22,8 +22,9 @@ mod config_tests {
 
     #[test]
     fn test_job_validation() {
-        assert!("".is_empty());
-        assert!("my-job_1.backup".chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
+        assert!("my-job_1.backup"
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
     }
 
     #[test]

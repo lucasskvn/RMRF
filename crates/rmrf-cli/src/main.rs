@@ -12,7 +12,9 @@ use clap::{Parser, Subcommand};
 use config::RmrfConfig;
 use disk_detect::{parse_disk_format, DiskFormatArg};
 use hypervisor::{validate_vm_id, Hypervisor};
-use lock::{check_stale_sentinels, store_sentinel_path, try_lock_store, unlock_store, SentinelCheckResult};
+use lock::{
+    check_stale_sentinels, store_sentinel_path, try_lock_store, unlock_store, SentinelCheckResult,
+};
 use std::path::{Path, PathBuf};
 
 struct BackupOptions {
@@ -91,14 +93,22 @@ enum Command {
         manifest: PathBuf,
         #[arg(short, long)]
         store: Option<PathBuf>,
-        #[arg(short, long, required = true)]
-        output: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
         #[arg(long)]
         force: bool,
         #[arg(long, default_value = "4")]
         jobs: usize,
         #[arg(long)]
         identity: Option<String>,
+        #[arg(long)]
+        vm: Option<String>,
+        #[arg(long)]
+        disk: Option<String>,
+        #[arg(long)]
+        no_suspend: bool,
+        #[arg(long, default_value = "auto")]
+        hypervisor: Hypervisor,
     },
     #[command(about = "List all backups in a store")]
     List {
@@ -208,9 +218,22 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             encrypt,
             live,
             qmp_socket,
-        } => dispatch_backup(BackupOptions {
-            path, store, retain, vm, disk, disk_name, format,
-            no_suspend, hypervisor, encrypt, live, _qmp_socket: qmp_socket }, cfg
+        } => dispatch_backup(
+            BackupOptions {
+                path,
+                store,
+                retain,
+                vm,
+                disk,
+                disk_name,
+                format,
+                no_suspend,
+                hypervisor,
+                encrypt,
+                live,
+                _qmp_socket: qmp_socket,
+            },
+            cfg,
         ),
         Command::Restore {
             manifest,
@@ -219,14 +242,22 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             force,
             jobs,
             identity,
+            vm,
+            disk,
+            no_suspend,
+            hypervisor,
         } => {
             let restore_opts = restore::RestoreOptions {
                 manifest_path: &manifest,
                 store_dir: store.as_deref().unwrap_or(&cfg.store),
-                output: &output,
+                output: output.as_deref(),
                 force,
                 jobs,
                 identity: identity.as_deref(),
+                vm: vm.as_deref(),
+                disk: disk.as_deref(),
+                no_suspend,
+                hypervisor: &hypervisor,
             };
             restore::restore(&restore_opts)
         }
@@ -262,14 +293,13 @@ fn dispatch_command(command: Command, cfg: &RmrfConfig) -> bool {
             store,
             days,
             dry_run,
-        } => commands::run_retention_and_gc(
-            store.as_deref().unwrap_or(&cfg.store),
-            days,
-            dry_run,
-        ),
+        } => commands::run_retention_and_gc(store.as_deref().unwrap_or(&cfg.store), days, dry_run),
         Command::Check { store } => {
             let result = check_stale_sentinels(store.as_deref().unwrap_or(&cfg.store));
-            matches!(result, SentinelCheckResult::Clean | SentinelCheckResult::Recovered)
+            matches!(
+                result,
+                SentinelCheckResult::Clean | SentinelCheckResult::Recovered
+            )
         }
     }
 }
@@ -287,22 +317,29 @@ fn handle_gc(store: &Path, dry_run: bool) -> bool {
     ok
 }
 
-fn resolve_backup_path(path: Option<&Path>, vm: &Option<String>, disk: Option<&str>, disk_name: &Option<String>) -> Result<(std::path::PathBuf, String), String> {
+fn resolve_backup_path(
+    path: Option<&Path>,
+    vm: &Option<String>,
+    disk: Option<&str>,
+    disk_name: &Option<String>,
+) -> Result<(std::path::PathBuf, String), String> {
     match (path, vm) {
         (Some(p), _) => Ok((p.to_path_buf(), String::new())),
-        (None, Some(vm_id)) => {
-            disk_detect::detect_disk_path(vm_id, disk).map(|(p, name)| {
-                if disk_name.is_none() {
-                    eprintln!("Auto-detected disk: {name}");
-                }
-                (p, name)
-            })
-        }
+        (None, Some(vm_id)) => disk_detect::detect_disk_path(vm_id, disk).map(|(p, name)| {
+            if disk_name.is_none() {
+                eprintln!("Auto-detected disk: {name}");
+            }
+            (p, name)
+        }),
         (None, None) => Err("<PATH> is required unless --vm is specified".into()),
     }
 }
 
-fn build_lifecycle(vm: &Option<String>, no_suspend: bool, hypervisor: &Hypervisor) -> Box<dyn rmrf_source::VmLifecycle> {
+fn build_lifecycle(
+    vm: &Option<String>,
+    no_suspend: bool,
+    hypervisor: &Hypervisor,
+) -> Box<dyn rmrf_source::VmLifecycle> {
     if no_suspend {
         Box::new(rmrf_source::NoopLifecycle)
     } else {
@@ -310,10 +347,17 @@ fn build_lifecycle(vm: &Option<String>, no_suspend: bool, hypervisor: &Hyperviso
     }
 }
 
-fn run_backup_with_vm(opts: &RunBackupOptions, vm_id: &str, lifecycle: Box<dyn rmrf_source::VmLifecycle>) -> bool {
-    let disk_label = opts.disk_name
-        .as_deref()
-        .unwrap_or_else(|| opts.path.file_name().and_then(|s| s.to_str()).unwrap_or("disk"));
+fn run_backup_with_vm(
+    opts: &RunBackupOptions,
+    vm_id: &str,
+    lifecycle: Box<dyn rmrf_source::VmLifecycle>,
+) -> bool {
+    let disk_label = opts.disk_name.as_deref().unwrap_or_else(|| {
+        opts.path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("disk")
+    });
     let sentinel = store_sentinel_path(opts.store, vm_id);
     std::fs::write(&sentinel, chrono::Utc::now().to_rfc3339()).ok();
     let backup_vm_opts = backup::BackupVmOptions {
@@ -330,7 +374,10 @@ fn run_backup_with_vm(opts: &RunBackupOptions, vm_id: &str, lifecycle: Box<dyn r
     result
 }
 
-fn run_backup_with_lock(opts: &RunBackupOptions, lifecycle: Box<dyn rmrf_source::VmLifecycle>) -> bool {
+fn run_backup_with_lock(
+    opts: &RunBackupOptions,
+    lifecycle: Box<dyn rmrf_source::VmLifecycle>,
+) -> bool {
     if !try_lock_store(opts.store) {
         return false;
     }
@@ -370,7 +417,12 @@ fn handle_backup(opts: &BackupOptions, cfg: &RmrfConfig) -> bool {
         }
     }
 
-    let (resolved_path, _) = match resolve_backup_path(opts.path.as_deref(), &opts.vm, opts.disk.as_deref(), &opts.disk_name) {
+    let (resolved_path, _) = match resolve_backup_path(
+        opts.path.as_deref(),
+        &opts.vm,
+        opts.disk.as_deref(),
+        &opts.disk_name,
+    ) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Error: {e}");
