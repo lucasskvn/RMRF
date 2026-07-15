@@ -40,7 +40,16 @@ pub struct RestoreOptions<'a> {
     pub hypervisor: &'a Hypervisor,
 }
 
-fn prepare_restore(opts: &RestoreOptions) -> Option<RestoreCtx> {
+fn derive_store_from_manifest(manifest_path: &Path) -> Option<PathBuf> {
+    let parent = manifest_path.parent()?;
+    if parent.file_name()?.to_str()? == "manifests" {
+        parent.parent().map(|p| p.to_path_buf())
+    } else {
+        None
+    }
+}
+
+fn prepare_restore(opts: &RestoreOptions, store_dir: &Path) -> Option<RestoreCtx> {
     let manifest = match Manifest::load(opts.manifest_path) {
         Ok(m) => m,
         Err(e) => {
@@ -52,7 +61,7 @@ fn prepare_restore(opts: &RestoreOptions) -> Option<RestoreCtx> {
     if !check_overwrite(&output_path, opts.force) {
         return None;
     }
-    let chunk_store = match open_chunk_store(opts.store_dir, &manifest, opts.identity) {
+    let chunk_store = match open_chunk_store(store_dir, &manifest, opts.identity) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{e}");
@@ -68,10 +77,47 @@ fn prepare_restore(opts: &RestoreOptions) -> Option<RestoreCtx> {
 }
 
 pub fn restore(opts: &RestoreOptions) -> bool {
+    let store_dir = derive_store_from_manifest(opts.manifest_path)
+        .unwrap_or_else(|| opts.store_dir.to_path_buf());
+
     match (opts.output, opts.vm) {
         (None, None) => {
-            eprintln!("Error: either --output (-o) or --vm must be specified");
-            false
+            let manifest = match Manifest::load(opts.manifest_path) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("Error loading manifest: {e}");
+                    return false;
+                }
+            };
+            let chunk_store = match open_chunk_store(&store_dir, &manifest, opts.identity) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return false;
+                }
+            };
+            let output_path = Path::new(&manifest.source.path);
+            println!(
+                "Restore: {} -> {}",
+                opts.manifest_path.display(),
+                output_path.display()
+            );
+            if !check_overwrite(output_path, opts.force) {
+                return false;
+            }
+            if is_empty_manifest(&manifest, output_path) {
+                return true;
+            }
+            match restore_file(&manifest, &*chunk_store, output_path, opts.jobs) {
+                Ok(_) => {
+                    println!("Restore complete: {}", output_path.display());
+                    true
+                }
+                Err(e) => {
+                    eprintln!("Restore failed: {e}");
+                    false
+                }
+            }
         }
         (Some(_), Some(_)) => {
             eprintln!("Error: --output (-o) and --vm are mutually exclusive");
@@ -79,7 +125,7 @@ pub fn restore(opts: &RestoreOptions) -> bool {
         }
         (Some(_), None) => {
             println!("Restore: {}", opts.manifest_path.display());
-            let ctx = match prepare_restore(opts) {
+            let ctx = match prepare_restore(opts, &store_dir) {
                 Some(c) => c,
                 None => return false,
             };
@@ -110,7 +156,7 @@ pub fn restore(opts: &RestoreOptions) -> bool {
                     return false;
                 }
             };
-            let chunk_store = match open_chunk_store(opts.store_dir, &manifest, opts.identity) {
+            let chunk_store = match open_chunk_store(&store_dir, &manifest, opts.identity) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("{e}");
@@ -511,6 +557,27 @@ mod tests {
         let lifecycle = NoopLifecycle;
         let guard = ResumeGuard::new(&lifecycle, vm_id);
         guard.disarm();
+    }
+
+    #[test]
+    fn derive_store_from_manifest_in_manifests_dir() {
+        let p = Path::new("/some/store/manifests/20250101T120000Z-test.bincode");
+        assert_eq!(
+            derive_store_from_manifest(p),
+            Some(PathBuf::from("/some/store"))
+        );
+    }
+
+    #[test]
+    fn derive_store_from_manifest_not_in_manifests() {
+        let p = Path::new("/some/other/path/manifest.bincode");
+        assert_eq!(derive_store_from_manifest(p), None);
+    }
+
+    #[test]
+    fn derive_store_from_manifest_root_path() {
+        let p = Path::new("manifest.bincode");
+        assert_eq!(derive_store_from_manifest(p), None);
     }
 
     #[test]
