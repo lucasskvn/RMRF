@@ -76,72 +76,79 @@ fn prepare_restore(opts: &RestoreOptions, store_dir: &Path) -> Option<RestoreCtx
     })
 }
 
+fn load_manifest_and_store(
+    manifest_path: &Path,
+    store_dir: &Path,
+    identity: Option<&str>,
+) -> Option<(Manifest, Box<dyn ChunkStore>)> {
+    let manifest = match Manifest::load(manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Error loading manifest: {e}");
+            return None;
+        }
+    };
+    let chunk_store = match open_chunk_store(store_dir, &manifest, identity) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return None;
+        }
+    };
+    Some((manifest, chunk_store))
+}
+
+fn restore_to_path(
+    manifest: &Manifest,
+    chunk_store: &dyn ChunkStore,
+    output_path: &Path,
+    force: bool,
+    jobs: usize,
+) -> bool {
+    println!(
+        "Restore: {} -> {}",
+        manifest.source.path,
+        output_path.display()
+    );
+    if !check_overwrite(output_path, force) {
+        return false;
+    }
+    if is_empty_manifest(manifest, output_path) {
+        return true;
+    }
+    match restore_file(manifest, chunk_store, output_path, jobs) {
+        Ok(_) => {
+            println!("Restore complete: {}", output_path.display());
+            true
+        }
+        Err(e) => {
+            eprintln!("Restore failed: {e}");
+            false
+        }
+    }
+}
+
 pub fn restore(opts: &RestoreOptions) -> bool {
     let store_dir = derive_store_from_manifest(opts.manifest_path)
         .unwrap_or_else(|| opts.store_dir.to_path_buf());
 
     match (opts.output, opts.vm) {
-        (None, None) => {
-            let manifest = match Manifest::load(opts.manifest_path) {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!("Error loading manifest: {e}");
-                    return false;
-                }
-            };
-            let chunk_store = match open_chunk_store(&store_dir, &manifest, opts.identity) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("{e}");
-                    return false;
-                }
-            };
-            let output_path = Path::new(&manifest.source.path);
-            println!(
-                "Restore: {} -> {}",
-                opts.manifest_path.display(),
-                output_path.display()
-            );
-            if !check_overwrite(output_path, opts.force) {
-                return false;
-            }
-            if is_empty_manifest(&manifest, output_path) {
-                return true;
-            }
-            match restore_file(&manifest, &*chunk_store, output_path, opts.jobs) {
-                Ok(_) => {
-                    println!("Restore complete: {}", output_path.display());
-                    true
-                }
-                Err(e) => {
-                    eprintln!("Restore failed: {e}");
-                    false
-                }
-            }
-        }
         (Some(_), Some(_)) => {
             eprintln!("Error: --output (-o) and --vm are mutually exclusive");
             false
         }
         (Some(_), None) => {
-            println!("Restore: {}", opts.manifest_path.display());
             let ctx = match prepare_restore(opts, &store_dir) {
                 Some(c) => c,
                 None => return false,
             };
-            if is_empty_manifest(&ctx.manifest, &ctx.output_path) {
-                return true;
-            }
-            match restore_file(&ctx.manifest, &*ctx.chunk_store, &ctx.output_path, ctx.jobs) {
-                Ok(_) => {
-                    println!("Restore complete: {}", ctx.output_path.display());
-                    true
-                }
-                Err(e) => {
-                    eprintln!("Restore failed: {e}");
-                    false
-                }
-            }
+            restore_to_path(
+                &ctx.manifest,
+                &*ctx.chunk_store,
+                &ctx.output_path,
+                true,
+                ctx.jobs,
+            )
         }
         (None, Some(vm_id)) => {
             println!(
@@ -149,20 +156,11 @@ pub fn restore(opts: &RestoreOptions) -> bool {
                 vm_id,
                 opts.manifest_path.display()
             );
-            let manifest = match Manifest::load(opts.manifest_path) {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!("Error loading manifest: {e}");
-                    return false;
-                }
-            };
-            let chunk_store = match open_chunk_store(&store_dir, &manifest, opts.identity) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("{e}");
-                    return false;
-                }
-            };
+            let (manifest, chunk_store) =
+                match load_manifest_and_store(opts.manifest_path, &store_dir, opts.identity) {
+                    Some(p) => p,
+                    None => return false,
+                };
             restore_vm(
                 &manifest,
                 &*chunk_store,
@@ -172,6 +170,15 @@ pub fn restore(opts: &RestoreOptions) -> bool {
                 opts.hypervisor,
                 opts.jobs,
             )
+        }
+        (None, None) => {
+            let (manifest, chunk_store) =
+                match load_manifest_and_store(opts.manifest_path, &store_dir, opts.identity) {
+                    Some(p) => p,
+                    None => return false,
+                };
+            let output_path = Path::new(&manifest.source.path);
+            restore_to_path(&manifest, &*chunk_store, output_path, opts.force, opts.jobs)
         }
     }
 }
@@ -436,19 +443,13 @@ fn restore_to_block_device(
     device_path: &Path,
     jobs: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = OpenOptions::new().write(true).open(device_path)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(device_path)?;
     write_chunks_to_writer(manifest, store, &mut file, jobs)?;
     file.sync_all()?;
     Ok(())
-}
-
-fn restore_to_regular_file(
-    manifest: &Manifest,
-    store: &dyn ChunkStore,
-    dest: &Path,
-    jobs: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    restore_file(manifest, store, dest, jobs)
 }
 
 fn restore_vm(
@@ -504,7 +505,7 @@ fn restore_vm(
     let result = if is_block_device(&disk_path) {
         restore_to_block_device(manifest, store, &disk_path, jobs)
     } else {
-        restore_to_regular_file(manifest, store, &disk_path, jobs)
+        restore_file(manifest, store, &disk_path, jobs)
     };
 
     match result {
